@@ -1786,4 +1786,3 @@ export default function EIIEditor() {
     </div>
   );
 }
-```
