@@ -184,6 +184,7 @@ export default function EIIEditor() {
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [renamingTaskId, setRenamingTaskId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [loadedTaskId, setLoadedTaskId] = useState(null);
   const [editingPlayerPosId, setEditingPlayerPosId] = useState(null);
   const [playerPosDraft, setPlayerPosDraft] = useState("");
   const [markerDimDraft, setMarkerDimDraft] = useState({ w: "", h: "" });
@@ -401,7 +402,7 @@ export default function EIIEditor() {
   };
   const startMoveZone = (zone) => (e) => {
     e.stopPropagation();
-    setSelectedZoneId((cur) => (cur === zone.id ? null : zone.id));
+    setSelectedZoneId(zone.id);
     const p = toSvgPoint(e.clientX, e.clientY);
     dragRef.current = { type: "moveZone", id: zone.id, offX: p.x - zone.x, offY: p.y - zone.y };
   };
@@ -573,8 +574,40 @@ export default function EIIEditor() {
       const newLib = [task, ...library];
       setLibrary(newLib);
       await persistLibrary(newLib);
+      setLoadedTaskId(task.id);
       setShowSaveForm(false);
       setSaveNameDraft("");
+    } finally {
+      setLibBusy(false);
+    }
+  };
+  const loadedTask = loadedTaskId ? library.find((t) => t.id === loadedTaskId) || null : null;
+  const overwriteCurrentTask = async () => {
+    if (!loadedTaskId) return;
+    setLibBusy(true);
+    setLibError(null);
+    try {
+      const demands = [...new Set(zones.map((z) => computeStats(z, players, thresholds).quadrant).filter(Boolean))];
+      const maxTeamPlayers = Math.max(0, ...zones.map((z) => computeStats(z, players, thresholds).teamCount || 0));
+      const newLib = library.map((t) =>
+        t.id === loadedTaskId
+          ? {
+              ...t,
+              savedAt: Date.now(),
+              summary: {
+                zoneCount: zones.length,
+                dims: zones.map((z) => `${(z.w / SCALE).toFixed(1)}×${(z.h / SCALE).toFixed(1)}m`),
+                demands,
+                maxTeamPlayers,
+                playerTotal: players.length,
+              },
+              data: { zones, players, goalkeepers, balls, miniGoals, lines, markers, materials, texts },
+            }
+          : t
+      );
+      setLibrary(newLib);
+      await persistLibrary(newLib);
+      setShowSaveForm(false);
     } finally {
       setLibBusy(false);
     }
@@ -592,12 +625,14 @@ export default function EIIEditor() {
     setTexts(d.texts || []);
     setSelectedZoneId(null);
     setActiveObj(null);
+    setLoadedTaskId(task.id);
     setShowLibrary(false);
   };
   const deleteTask = async (id) => {
     const newLib = library.filter((t) => t.id !== id);
     setLibrary(newLib);
     await persistLibrary(newLib);
+    if (loadedTaskId === id) setLoadedTaskId(null);
   };
   const renameTask = async (id, newName) => {
     const name = newName.trim();
@@ -840,6 +875,7 @@ export default function EIIEditor() {
     setDrawTool(null);
     setActiveObj(null);
     setPngUrl(null);
+    setLoadedTaskId(null);
   };
   const selectedZone = zones.find((z) => z.id === selectedZoneId) || null;
   const stats = computeStats(selectedZone, players, thresholds);
@@ -1057,6 +1093,11 @@ export default function EIIEditor() {
       `}</style>
       <header className="shrink-0 px-3 py-1.5 border-b border-slate-800 flex items-center gap-3">
         <h1 className="text-base font-semibold tracking-tight text-emerald-400">Pizarra Técnica</h1>
+        {loadedTask && (
+          <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 truncate max-w-[160px]" title={`Editando: ${loadedTask.name}`}>
+            📝 {loadedTask.name}
+          </span>
+        )}
         <span className="text-[10px] text-slate-500 uppercase tracking-widest hidden md:inline">Diseñador de tareas · Sub-19 · Tabla 4.2, Castellano &amp; Casamichana (2016)</span>
         <div className="ml-auto flex items-center gap-1.5">
           {authedUser?.isAdmin && (
@@ -1089,8 +1130,17 @@ export default function EIIEditor() {
         </div>
       </header>
       {showSaveForm && (
-        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2 text-xs">
-          <span className="text-slate-400">Nombre de la tarea:</span>
+        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex flex-wrap items-center gap-2 text-xs">
+          {loadedTask && (
+            <>
+              <span className="text-slate-400">Editando "<b className="text-slate-200">{loadedTask.name}</b>":</span>
+              <button onClick={overwriteCurrentTask} disabled={libBusy} className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50">
+                {libBusy ? "Guardando…" : "Sobrescribir cambios"}
+              </button>
+              <span className="text-slate-600">o</span>
+            </>
+          )}
+          <span className="text-slate-400">{loadedTask ? "Guardar como nueva:" : "Nombre de la tarea:"}</span>
           <input
             type="text" autoFocus value={saveNameDraft}
             onChange={(e) => setSaveNameDraft(e.target.value)}
@@ -1098,8 +1148,8 @@ export default function EIIEditor() {
             placeholder={`Tarea ${new Date().toLocaleDateString("es-ES")}`}
             className="flex-1 max-w-xs bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100"
           />
-          <button onClick={saveCurrentTask} disabled={libBusy} className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50">
-            {libBusy ? "Guardando…" : "Guardar"}
+          <button onClick={saveCurrentTask} disabled={libBusy} className="px-2.5 py-1 rounded-md bg-slate-700 hover:border-emerald-600 text-slate-200 font-medium disabled:opacity-50">
+            {libBusy ? "Guardando…" : "Guardar como nueva"}
           </button>
           <button onClick={() => setShowSaveForm(false)} className="text-slate-400 hover:text-slate-200">✕</button>
         </div>
