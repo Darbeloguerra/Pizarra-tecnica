@@ -119,7 +119,7 @@ export default function EIIEditor() {
   const svgRef = useRef(null);
   const dragRef = useRef(null);
   const [zones, setZones] = useState([]);
-  const [users, setUsers] = useState(null);
+  const [users, setUsers] = useState(null); 
   const [authedUser, setAuthedUser] = useState(null);
   const [pinInput, setPinInput] = useState("");
   const [authError, setAuthError] = useState("");
@@ -133,9 +133,9 @@ export default function EIIEditor() {
   const [showForgotPin, setShowForgotPin] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState(null);
   const [recoveryCodeInput, setRecoveryCodeInput] = useState("");
-  const [showNewRecoveryCode, setShowNewRecoveryCode] = useState(null);
-  const [newUserPinShown, setNewUserPinShown] = useState(null);
-  const [recoveryVerified, setRecoveryVerified] = useState(false);
+  const [showNewRecoveryCode, setShowNewRecoveryCode] = useState(null); 
+  const [newUserPinShown, setNewUserPinShown] = useState(null); 
+  const [recoveryVerified, setRecoveryVerified] = useState(false); 
   const [recoveryNewPin, setRecoveryNewPin] = useState("");
   const [visiblePinFor, setVisiblePinFor] = useState(null);
   const [showSetupPin, setShowSetupPin] = useState(false);
@@ -155,10 +155,10 @@ export default function EIIEditor() {
   const [nextKeeperId, setNextKeeperId] = useState(1);
   const [miniGoals, setMiniGoals] = useState([]);
   const [nextGoalId, setNextGoalId] = useState(1);
-  const [drawTool, setDrawTool] = useState(null);
-  const [lineStyle, setLineStyle] = useState("solid");
+  const [drawTool, setDrawTool] = useState(null); 
+  const [lineStyle, setLineStyle] = useState("solid"); 
   const [lineCurve, setLineCurve] = useState(false);
-  const [markerShape, setMarkerShape] = useState("rect");
+  const [markerShape, setMarkerShape] = useState("rect"); 
   const [drawColor, setDrawColor] = useState("#facc15");
   const [lines, setLines] = useState([]);
   const [nextLineId, setNextLineId] = useState(1);
@@ -182,6 +182,11 @@ export default function EIIEditor() {
   const [libraryLoaded, setLibraryLoaded] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showSaveForm, setShowSaveForm] = useState(false);
+  const [renamingTaskId, setRenamingTaskId] = useState(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [editingPlayerPosId, setEditingPlayerPosId] = useState(null);
+  const [playerPosDraft, setPlayerPosDraft] = useState("");
+  const [markerDimDraft, setMarkerDimDraft] = useState({ w: "", h: "" });
   const [saveNameDraft, setSaveNameDraft] = useState("");
   const [libFilter, setLibFilter] = useState({ demand: "all", minPlayers: "", maxPlayers: "" });
   const [libBusy, setLibBusy] = useState(false);
@@ -189,12 +194,32 @@ export default function EIIEditor() {
   const [activeObj, setActiveObj] = useState(null);
   const toggleActive = (kind, id) => setActiveObj((cur) => (cur && cur.kind === kind && cur.id === id ? null : { kind, id }));
   const isActive = (kind, id) => !!activeObj && activeObj.kind === kind && activeObj.id === id;
+  // Vista: "full" muestra todo el campo; "half" recorta la mitad izquierda y la GIRA 90°
+  // para que ocupe el mismo ancho horizontal que el campo completo, en vez de quedar
+  // estrecha y en vertical.
+  const [viewMode, setViewMode] = useState("full");
+  const halfMode = viewMode === "half";
+  const vbX = -MARGIN;
+  const vbY = -MARGIN;
+  const vbW = VB_W + 2 * MARGIN;
+  const vbH = VB_H + 2 * MARGIN;
+  // Con el giro, el ancho visible pasa a ser la altura del campo (+márgenes) y viceversa.
+  const halfDispW = VB_H + 2 * MARGIN;
+  const halfDispH = VB_W / 2 + 2 * MARGIN;
+  const halfTransform = `matrix(0,-1,1,0,${MARGIN},${VB_W / 2 + MARGIN})`;
   const toSvgPoint = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
-    const sx = (VB_W + 2 * MARGIN) / rect.width;
-    const sy = (VB_H + 2 * MARGIN) / rect.height;
-    return { x: (clientX - rect.left) * sx - MARGIN, y: (clientY - rect.top) * sy - MARGIN };
-  }, []);
+    if (halfMode) {
+      const sx = halfDispW / rect.width;
+      const sy = halfDispH / rect.height;
+      const vx = (clientX - rect.left) * sx;
+      const vy = (clientY - rect.top) * sy;
+      return { x: VB_W / 2 + MARGIN - vy, y: vx - MARGIN };
+    }
+    const sx = vbW / rect.width;
+    const sy = vbH / rect.height;
+    return { x: (clientX - rect.left) * sx + vbX, y: (clientY - rect.top) * sy + vbY };
+  }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH]);
   useEffect(() => {
     (async () => {
       try {
@@ -431,12 +456,20 @@ export default function EIIEditor() {
   const addPlayer = (team) => {
     const cx = zones.find((z) => z.id === selectedZoneId);
     const base = cx ? { x: cx.x + cx.w / 2, y: cx.y + cx.h / 2 } : { x: VB_W / 2, y: VB_H / 2 };
-    setPlayers((ps) => [...ps, { id: nextId, team, role: "poseedor", x: base.x + ((ps.length * 17) % 80) - 40, y: base.y + ((ps.length * 11) % 60) - 30 }]);
+    setPlayers((ps) => [...ps, { id: nextId, team, role: "poseedor", pos: "", x: base.x + ((ps.length * 17) % 80) - 40, y: base.y + ((ps.length * 11) % 60) - 30 }]);
     setNextId((n) => n + 1);
   };
   const removePlayer = (id) => setPlayers((ps) => ps.filter((p) => p.id !== id));
   const toggleRolePlayer = (id) =>
     setPlayers((ps) => ps.map((p) => (p.id === id && p.team !== "comodin" ? { ...p, role: p.role === "poseedor" ? "defensor" : "poseedor" } : p)));
+  const startEditPlayerPos = (p) => {
+    setEditingPlayerPosId(p.id);
+    setPlayerPosDraft(p.pos || "");
+  };
+  const commitPlayerPos = () => {
+    setPlayers((ps) => ps.map((p) => (p.id === editingPlayerPosId ? { ...p, pos: playerPosDraft.trim().slice(0, 4).toUpperCase() } : p)));
+    setEditingPlayerPosId(null);
+  };
   const addBall = () => {
     setBalls((bs) => [...bs, { id: nextBallId, x: VB_W / 2, y: VB_H / 2 }]);
     setNextBallId((n) => n + 1);
@@ -565,6 +598,13 @@ export default function EIIEditor() {
     setLibrary(newLib);
     await persistLibrary(newLib);
   };
+  const renameTask = async (id, newName) => {
+    const name = newName.trim();
+    if (!name) return;
+    const newLib = library.map((t) => (t.id === id ? { ...t, name } : t));
+    setLibrary(newLib);
+    await persistLibrary(newLib);
+  };
   const filteredLibrary = library.filter((t) => {
     if (libFilter.demand !== "all" && !t.summary.demands.includes(libFilter.demand)) return false;
     if (libFilter.minPlayers && t.summary.maxTeamPlayers < Number(libFilter.minPlayers)) return false;
@@ -581,7 +621,7 @@ export default function EIIEditor() {
     }
   };
   const generateRecoveryCode = () => {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; 
     let code = "";
     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
     return code.slice(0, 4) + "-" + code.slice(4);
@@ -590,7 +630,7 @@ export default function EIIEditor() {
     let pin;
     let tries = 0;
     do {
-      pin = String(Math.floor(100000 + Math.random() * 900000));
+      pin = String(Math.floor(100000 + Math.random() * 900000)); 
       tries++;
     } while (currentList.some((u) => u.pin === pin) && tries < 50);
     return pin;
@@ -605,7 +645,7 @@ export default function EIIEditor() {
     const code = generateRecoveryCode();
     setUsers(list);
     await persistUsers(list);
-    try { await apiPost("setRecoveryCode", { code }); } catch (err) { }
+    try { await apiPost("setRecoveryCode", { code }); } catch (err) {  }
     setRecoveryCode(code);
     setShowNewRecoveryCode({ code, pendingUser: admin });
     setAuthError("");
@@ -671,7 +711,7 @@ export default function EIIEditor() {
   };
   const regenerateRecoveryCode = async () => {
     const code = generateRecoveryCode();
-    try { await apiPost("setRecoveryCode", { code }); } catch (err) { }
+    try { await apiPost("setRecoveryCode", { code }); } catch (err) {  }
     setRecoveryCode(code);
     setShowNewRecoveryCode({ code, pendingUser: null });
   };
@@ -818,6 +858,23 @@ export default function EIIEditor() {
     const clampedM = Math.min(Math.max(raw, MIN_ZONE_PX / SCALE), maxM);
     setZoneDimensionMeters(axis, clampedM);
     setDimDraft((d) => ({ ...d, [axis]: clampedM.toFixed(1) }));
+  };
+  const activeMarker = activeObj?.kind === "marker" ? markers.find((m) => m.id === activeObj.id) || null : null;
+  useEffect(() => {
+    if (activeMarker) {
+      setMarkerDimDraft({ w: (activeMarker.w / SCALE).toFixed(1), h: (activeMarker.h / SCALE).toFixed(1) });
+    }
+  }, [activeObj?.kind, activeObj?.id]);
+  const commitMarkerDim = (axis) => {
+    if (!activeMarker) return;
+    const raw = Number(markerDimDraft[axis]);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      setMarkerDimDraft((d) => ({ ...d, [axis]: (activeMarker[axis] / SCALE).toFixed(1) }));
+      return;
+    }
+    const clampedPx = Math.max(raw * SCALE, MIN_ZONE_PX);
+    setMarkers((ms) => ms.map((m) => (m.id === activeMarker.id ? { ...m, [axis]: clampedPx } : m)));
+    setMarkerDimDraft((d) => ({ ...d, [axis]: (clampedPx / SCALE).toFixed(1) }));
   };
   const distTag = (active, gateOk, distOk) => (active ? "Activa" : gateOk && !distOk ? "Forma" : "—");
   const variables = stats
@@ -1059,6 +1116,39 @@ export default function EIIEditor() {
           <button onClick={() => setEditingTextId(null)} className="text-slate-400 hover:text-slate-200">✕</button>
         </div>
       )}
+      {editingPlayerPosId !== null && (
+        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2 text-xs">
+          <span className="text-slate-400">Posición (ej. LD, MC, DC):</span>
+          <input
+            type="text" autoFocus value={playerPosDraft} maxLength={4}
+            onChange={(e) => setPlayerPosDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") commitPlayerPos(); }}
+            className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100 uppercase"
+          />
+          <button onClick={commitPlayerPos} className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium">Aceptar</button>
+          <button onClick={() => setEditingPlayerPosId(null)} className="text-slate-400 hover:text-slate-200">✕</button>
+        </div>
+      )}
+      {activeMarker && (
+        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2 text-xs">
+          <span className="text-slate-400">Marca — Ancho (m):</span>
+          <input
+            type="number" step="0.5" min="0.3" value={markerDimDraft.w}
+            onChange={(e) => setMarkerDimDraft((d) => ({ ...d, w: e.target.value }))}
+            onBlur={() => commitMarkerDim("w")}
+            onKeyDown={(e) => { if (e.key === "Enter") { commitMarkerDim("w"); e.target.blur(); } }}
+            className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-slate-100"
+          />
+          <span className="text-slate-400">Alto (m):</span>
+          <input
+            type="number" step="0.5" min="0.3" value={markerDimDraft.h}
+            onChange={(e) => setMarkerDimDraft((d) => ({ ...d, h: e.target.value }))}
+            onBlur={() => commitMarkerDim("h")}
+            onKeyDown={(e) => { if (e.key === "Enter") { commitMarkerDim("h"); e.target.blur(); } }}
+            className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-slate-100"
+          />
+        </div>
+      )}
       {pngUrl && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setPngUrl(null)}>
           <div className="bg-slate-900 rounded-lg border border-slate-700 max-w-full max-h-full flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -1139,6 +1229,14 @@ export default function EIIEditor() {
               <MousePointer2 size={16} />
             </button>
             <button
+              onClick={() => setViewMode((v) => (v === "half" ? "full" : "half"))}
+              title={viewMode === "half" ? "Ver campo completo" : "Ampliar 1/2 campo (girado)"}
+              className={`w-9 h-9 rounded-md border flex items-center justify-center ${viewMode === "half" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300"}`}
+            >
+              <Columns2 size={16} />
+            </button>
+            <div className="w-8 border-t border-slate-800 my-0.5" />
+            <button
               onClick={() => setDrawTool("line")}
               title="Línea"
               className={`w-9 h-9 rounded-md border flex items-center justify-center ${drawTool === "line" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300"}`}
@@ -1216,7 +1314,7 @@ export default function EIIEditor() {
           <div className="flex-1 min-w-0 min-h-0 rounded-lg border border-slate-800 bg-black/30 overflow-hidden">
             <svg
               ref={svgRef}
-              viewBox={`${-MARGIN} ${-MARGIN} ${VB_W + 2 * MARGIN} ${VB_H + 2 * MARGIN}`}
+              viewBox={halfMode ? `0 0 ${halfDispW} ${halfDispH}` : `${vbX} ${vbY} ${vbW} ${vbH}`}
               preserveAspectRatio="xMidYMid meet"
               className="w-full h-full block cursor-crosshair"
               style={{ touchAction: "none" }}
@@ -1229,7 +1327,7 @@ export default function EIIEditor() {
                   </marker>
                 ))}
               </defs>
-              <g>
+              <g transform={halfMode ? halfTransform : undefined}>
                 <rect x={-MARGIN} y={-MARGIN} width={VB_W + 2 * MARGIN} height={VB_H + 2 * MARGIN} fill="#1c2a1f" />
                 <text x={-MARGIN + 6} y={-MARGIN + 16} fontSize="11" fill="#4b6350" fontFamily="ui-monospace, monospace">Espacio externo</text>
                 {Array.from({ length: 10 }).map((_, i) => (
@@ -1246,7 +1344,7 @@ export default function EIIEditor() {
                 </g>
                 {[0, VB_W].map((goalX) => {
                   const depth = 22;
-                  const gw = 36.6;
+                  const gw = 36.6; 
                   const dir = goalX === 0 ? -1 : 1;
                   return (
                     <g key={goalX}>
@@ -1262,12 +1360,10 @@ export default function EIIEditor() {
                   const color = zStats.quadrant ? QUADRANT_COLOR[zStats.quadrant] : NEUTRAL_COLOR;
                   const isSel = z.id === selectedZoneId;
                   const labelText = `${(z.w / SCALE).toFixed(1)}×${(z.h / SCALE).toFixed(1)}m · EII ${zStats.eii !== null ? zStats.eii.toFixed(0) : "–"} · ${zStats.quadrant ? QUADRANT_LABEL[zStats.quadrant] : "sin jug."}`;
-                  const pillPad = 26;
-                  const pillW = Math.min(Math.max(labelText.length * 8.6 + 28 + pillPad, 180), VB_W + 2 * MARGIN - 8);
-                  const pillH = 30;
-                  const spaceAbove = z.y >= pillH + 14;
-                  const pillY = clamp(spaceAbove ? z.y - pillH - 10 : z.y + z.h + 10, -MARGIN + 4, VB_H + MARGIN - pillH - 4);
-                  const pillX = clamp(z.x, -MARGIN + 2, VB_W + MARGIN - pillW - 2);
+                  const pillW = Math.min(labelText.length * 5.4 + 12, VB_W + 2 * MARGIN - z.x - 6);
+                  const pillH = 15;
+                  const pillX = z.x + 3;
+                  const pillY = z.y + 3;
                   return (
                     <g key={z.id}>
                       <rect
@@ -1275,19 +1371,22 @@ export default function EIIEditor() {
                         fill={color} fillOpacity={isSel ? 0.32 : 0.2}
                         stroke={color} strokeWidth={isSel ? 3 : 2}
                         strokeDasharray={isSel ? undefined : "5 4"}
-                        onPointerDown={startMoveZone(z)}
-                        style={{ cursor: drawing ? "crosshair" : "move" }}
+                        onPointerDown={drawTool ? undefined : startMoveZone(z)}
+                        style={{ cursor: drawTool ? "crosshair" : drawing ? "crosshair" : "move" }}
                       />
-                      {isSel && !drawing && ["nw", "ne", "sw", "se"].map((c) => {
+                      {isSel && !drawing && !drawTool && ["nw", "ne", "sw", "se"].map((c) => {
                         const cx = c.includes("w") ? z.x : z.x + z.w;
                         const cy = c.includes("n") ? z.y : z.y + z.h;
                         return <rect key={c} x={cx - 7} y={cy - 7} width={14} height={14} fill={color} stroke="#0f172a" strokeWidth={1.5} onPointerDown={startResize(z, c)} style={{ cursor: `${c}-resize` }} />;
                       })}
-                      <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={6} fill="#0f172a" fillOpacity={0.95} stroke={color} strokeWidth={1.5} />
-                      <text x={pillX + 12} y={pillY + pillH / 2 + 5} fill="#f8fafc" fontSize="14" fontWeight="600" fontFamily="ui-monospace, monospace">
+                      {/* Etiqueta discreta, siempre dentro de la zona (esquina sup. izq.), no molesta a jugadores fuera del campo */}
+                      <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={3} fill="#0f172a" fillOpacity={0.68} pointerEvents="none" />
+                      <text x={pillX + 4} y={pillY + pillH / 2 + 3.5} fill="#f8fafc" fontSize="9" fontFamily="ui-monospace, monospace" pointerEvents="none">
                         {labelText}
                       </text>
-                      <text x={pillX + pillW - 12} y={pillY + pillH / 2 + 5} textAnchor="end" fill="#94a3b8" fontSize="16" onPointerDown={(e) => { e.stopPropagation(); removeZone(z.id); }} style={{ cursor: "pointer" }}>{isSel ? "✕" : ""}</text>
+                      {isSel && (
+                        <text x={z.x + z.w - 6} y={z.y + 13} textAnchor="end" fill="#94a3b8" fontSize="14" onPointerDown={(e) => { e.stopPropagation(); removeZone(z.id); }} style={{ cursor: "pointer" }}>✕</text>
+                      )}
                     </g>
                   );
                 })}
@@ -1432,7 +1531,17 @@ export default function EIIEditor() {
                       onPointerDown={startMovePlayer(p.id)}
                       style={{ cursor: "grab" }}
                     />
-                    <text x={p.x} y={p.y - 20} textAnchor="middle" fontSize="14" fill="#94a3b8" onPointerDown={(e) => { e.stopPropagation(); removePlayer(p.id); }} style={{ cursor: "pointer" }}>{isActive("player", p.id) ? "✕" : ""}</text>
+                    {p.pos && (
+                      <text x={p.x} y={p.y + 3} textAnchor="middle" fontSize="8" fontWeight="700" fill={p.team === "yellow" || p.team === "comodin" ? "#111827" : "#f8fafc"} pointerEvents="none" transform={halfMode ? `rotate(90 ${p.x} ${p.y})` : undefined}>
+                        {p.pos}
+                      </text>
+                    )}
+                    {isActive("player", p.id) && (
+                      <>
+                        <text x={p.x - 8} y={p.y - 20} textAnchor="middle" fontSize="12" fill="#94a3b8" onPointerDown={(e) => { e.stopPropagation(); startEditPlayerPos(p); }} style={{ cursor: "pointer" }}>✎</text>
+                        <text x={p.x + 8} y={p.y - 20} textAnchor="middle" fontSize="14" fill="#94a3b8" onPointerDown={(e) => { e.stopPropagation(); removePlayer(p.id); }} style={{ cursor: "pointer" }}>✕</text>
+                      </>
+                    )}
                   </g>
                 ))}
                 {goalkeepers.map((k) => (
@@ -1681,7 +1790,23 @@ export default function EIIEditor() {
               {filteredLibrary.map((t) => (
                 <div key={t.id} className="rounded-lg border border-slate-800 bg-slate-800/40 p-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-100 truncate">{t.name}</div>
+                    {renamingTaskId === t.id ? (
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <input
+                          autoFocus value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { renameTask(t.id, renameDraft); setRenamingTaskId(null); } }}
+                          className="flex-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm text-slate-100"
+                        />
+                        <button onClick={() => { renameTask(t.id, renameDraft); setRenamingTaskId(null); }} className="text-emerald-400 text-xs font-medium shrink-0">Guardar</button>
+                        <button onClick={() => setRenamingTaskId(null)} className="text-slate-500 text-xs shrink-0">Cancelar</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <div className="text-sm font-medium text-slate-100 truncate">{t.name}</div>
+                        <button onClick={() => { setRenamingTaskId(t.id); setRenameDraft(t.name); }} className="text-slate-500 hover:text-slate-300 shrink-0 text-xs">✎</button>
+                      </div>
+                    )}
                     <div className="text-[10px] text-slate-500 mt-0.5">
                       {new Date(t.savedAt).toLocaleDateString("es-ES")} · {t.summary.zoneCount} zona{t.summary.zoneCount !== 1 ? "s" : ""} · {t.summary.dims.join(", ") || "—"} · {t.summary.playerTotal} jugadores
                     </div>
