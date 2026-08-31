@@ -194,19 +194,20 @@ export default function EIIEditor() {
   const [activeObj, setActiveObj] = useState(null);
   const toggleActive = (kind, id) => setActiveObj((cur) => (cur && cur.kind === kind && cur.id === id ? null : { kind, id }));
   const isActive = (kind, id) => !!activeObj && activeObj.kind === kind && activeObj.id === id;
-  // Vista: "full" muestra todo el campo; "half" recorta la mitad izquierda y la GIRA 90°
-  // para que ocupe el mismo ancho horizontal que el campo completo, en vez de quedar
-  // estrecha y en vertical.
+  // Vista: "full" muestra todo el campo; "half" recorta EXACTAMENTE la mitad izquierda
+  // (sin invadir nada del campo contrario) y la gira 90° para que ocupe el ancho
+  // horizontal completo. Portería arriba, línea de medio campo abajo.
   const [viewMode, setViewMode] = useState("full");
   const halfMode = viewMode === "half";
   const vbX = -MARGIN;
   const vbY = -MARGIN;
   const vbW = VB_W + 2 * MARGIN;
   const vbH = VB_H + 2 * MARGIN;
-  // Con el giro, el ancho visible pasa a ser la altura del campo (+márgenes) y viceversa.
+  // Ancho visible = altura del campo (+márgenes arriba/abajo). Alto visible = solo hasta
+  // la línea de medio campo (sin margen extra hacia el campo contrario).
   const halfDispW = VB_H + 2 * MARGIN;
-  const halfDispH = VB_W / 2 + 2 * MARGIN;
-  const halfTransform = `matrix(0,-1,1,0,${MARGIN},${VB_W / 2 + MARGIN})`;
+  const halfDispH = VB_W / 2 + MARGIN;
+  const halfTransform = `matrix(0,1,-1,0,${VB_H + MARGIN},${MARGIN})`;
   const toSvgPoint = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
     if (halfMode) {
@@ -214,7 +215,7 @@ export default function EIIEditor() {
       const sy = halfDispH / rect.height;
       const vx = (clientX - rect.left) * sx;
       const vy = (clientY - rect.top) * sy;
-      return { x: VB_W / 2 + MARGIN - vy, y: vx - MARGIN };
+      return { x: vy - MARGIN, y: VB_H + MARGIN - vx };
     }
     const sx = vbW / rect.width;
     const sy = vbH / rect.height;
@@ -1532,7 +1533,7 @@ export default function EIIEditor() {
                       style={{ cursor: "grab" }}
                     />
                     {p.pos && (
-                      <text x={p.x} y={p.y + 3} textAnchor="middle" fontSize="8" fontWeight="700" fill={p.team === "yellow" || p.team === "comodin" ? "#111827" : "#f8fafc"} pointerEvents="none" transform={halfMode ? `rotate(90 ${p.x} ${p.y})` : undefined}>
+                      <text x={p.x} y={p.y + 3} textAnchor="middle" fontSize="8" fontWeight="700" fill={p.team === "yellow" || p.team === "comodin" ? "#111827" : "#f8fafc"} pointerEvents="none" transform={halfMode ? `rotate(-90 ${p.x} ${p.y})` : undefined}>
                         {p.pos}
                       </text>
                     )}
