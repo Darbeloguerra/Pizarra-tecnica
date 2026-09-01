@@ -25,7 +25,7 @@ const MIN_ZONE_PX = 3 * SCALE;
 const MARGIN_M = 8;
 const MARGIN = MARGIN_M * SCALE;
 const GRID = 1 * SCALE; // rejilla invisible de 1 m para alinear zonas
-const CENTER_SNAP = 7; // px de tolerancia para "imantar" objetos al centro de una zona
+const CENTER_SNAP = 14; // px de tolerancia para "imantar" objetos a las guías de una zona
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const snapGrid = (v) => Math.round(v / GRID) * GRID;
 const QUADRANT_COLOR = {
@@ -250,21 +250,23 @@ export default function EIIEditor() {
     return { x: (clientX - rect.left) * sx + vbX, y: (clientY - rect.top) * sy + vbY };
   }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH, zoomVB]);
   // Imán invisible: al soltar un objeto puntual (portería, jugador, material...) cerca de
-  // cualquier "guía" de la zona o subzona ACTIVA en ese momento (borde izq./der./arriba/abajo,
-  // centro, o el punto medio de cada lado) — solo la seleccionada, no todas las zonas del campo
-  // a la vez, para que no "salte" a una zona distinta sin querer.
+  // cualquier "guía" de la zona o subzona ACTIVA en ese momento — solo la seleccionada, no
+  // todas las zonas del campo a la vez, para que no "salte" a una zona distinta sin querer.
+  // La zona activa (seleccionada) SIEMPRE aporta sus guías: bordes, punto medio de cada lado,
+  // centro exacto y además los cuartos (25%/75%) de ancho y alto, para poder centrar un
+  // elemento no solo en el centro de la zona sino también en cada una de sus 4 subdivisiones.
   const selectedZone = zones.find((z) => z.id === selectedZoneId) || null;
   const activeMarker = activeObj?.kind === "marker" ? markers.find((m) => m.id === activeObj.id) || null : null;
   const snapToZoneCenter = useCallback(
     (x, y) => {
       const targets = [];
       if (selectedZone) targets.push(selectedZone);
-      if (activeMarker) targets.push(activeMarker);
+      if (activeMarker && activeMarker !== selectedZone) targets.push(activeMarker);
       if (targets.length === 0) return { x, y };
       let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
       for (const z of targets) {
-        const xGuides = [z.x, z.x + z.w / 2, z.x + z.w];
-        const yGuides = [z.y, z.y + z.h / 2, z.y + z.h];
+        const xGuides = [z.x, z.x + z.w * 0.25, z.x + z.w / 2, z.x + z.w * 0.75, z.x + z.w];
+        const yGuides = [z.y, z.y + z.h * 0.25, z.y + z.h / 2, z.y + z.h * 0.75, z.y + z.h];
         for (const gx of xGuides) {
           const d = Math.abs(x - gx);
           if (d < bestDx) { bestDx = d; sx = gx; }
@@ -277,6 +279,40 @@ export default function EIIEditor() {
       return { x: sx, y: sy };
     },
     [selectedZone, activeMarker]
+  );
+  // Imán zona-contra-zona: cuando arrastras un subespacio para ubicarlo dentro del espacio
+  // principal, el propio subespacio pasa a estar "seleccionado" (para poder redimensionarlo),
+  // así que ya no sirve como referencia el imán de arriba (que solo mira la zona seleccionada,
+  // y una zona nunca puede imantarse a sí misma). Aquí el subespacio en movimiento se imanta
+  // contra las guías (bordes, cuartos y centro) de las DEMÁS zonas del campo, probando su
+  // borde izq./centro/borde der. (y arriba/centro/abajo) contra cada guía, para poder tanto
+  // alinear su borde como centrarlo dentro del espacio principal.
+  const snapZonePos = useCallback(
+    (x, y, w, h, excludeId) => {
+      const others = zones.filter((z) => z.id !== excludeId);
+      if (others.length === 0) return { x, y };
+      let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
+      const xRefs = [0, w / 2, w];
+      const yRefs = [0, h / 2, h];
+      for (const z of others) {
+        const xGuides = [z.x, z.x + z.w * 0.25, z.x + z.w / 2, z.x + z.w * 0.75, z.x + z.w];
+        const yGuides = [z.y, z.y + z.h * 0.25, z.y + z.h / 2, z.y + z.h * 0.75, z.y + z.h];
+        for (const xr of xRefs) {
+          for (const gx of xGuides) {
+            const d = Math.abs(x + xr - gx);
+            if (d < bestDx) { bestDx = d; sx = gx - xr; }
+          }
+        }
+        for (const yr of yRefs) {
+          for (const gy of yGuides) {
+            const d = Math.abs(y + yr - gy);
+            if (d < bestDy) { bestDy = d; sy = gy - yr; }
+          }
+        }
+      }
+      return { x: sx, y: sy };
+    },
+    [zones]
   );
   useEffect(() => {
     (async () => {
@@ -319,7 +355,15 @@ export default function EIIEditor() {
         setDraftZone({ x, y, w, h });
       } else if (d.type === "moveZone") {
         setZones((zs) =>
-          zs.map((z) => (z.id === d.id ? { ...z, x: sg(clamp(p.x - d.offX, 0, VB_W - z.w)), y: sg(clamp(p.y - d.offY, 0, VB_H - z.h)) } : z))
+          zs.map((z) => {
+            if (z.id !== d.id) return z;
+            const rawX = clamp(p.x - d.offX, 0, VB_W - z.w);
+            const rawY = clamp(p.y - d.offY, 0, VB_H - z.h);
+            const snapped = snapZonePos(rawX, rawY, z.w, z.h, z.id);
+            const x = clamp(snapped.x !== rawX ? snapped.x : sg(rawX), 0, VB_W - z.w);
+            const y = clamp(snapped.y !== rawY ? snapped.y : sg(rawY), 0, VB_H - z.h);
+            return { ...z, x, y };
+          })
         );
       } else if (d.type === "resize") {
         setZones((zs) =>
@@ -433,7 +477,7 @@ export default function EIIEditor() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId, viewMode, snapToZoneCenter]);
+  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId, viewMode, snapToZoneCenter, snapZonePos]);
   const startCreate = (e) => {
     if (drawTool === "line" || drawTool === "arrow") {
       const p = toSvgPoint(e.clientX, e.clientY);
