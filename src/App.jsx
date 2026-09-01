@@ -215,9 +215,21 @@ export default function EIIEditor() {
   const halfDispH = VB_W / 2 + MARGIN;
   const halfTransform = `matrix(0,1,-1,0,${VB_H + MARGIN},${MARGIN})`;
   const ZOOM_PAD = 2 * SCALE; // 2 m de aire alrededor de la zona al hacer zoom
+  // El zoom nunca debe acercar más que la vista de "1/2 campo": si la zona es pequeña,
+  // se usa como mínimo el tamaño visible de media cancha en vez de ajustar solo a la zona.
+  const ZOOM_MIN_W = halfDispW;
+  const ZOOM_MIN_H = halfDispH;
   const zoomedZone = zoomedZoneId ? zones.find((z) => z.id === zoomedZoneId) || null : null;
   const zoomVB = zoomedZone
-    ? { x: zoomedZone.x - ZOOM_PAD, y: zoomedZone.y - ZOOM_PAD, w: zoomedZone.w + 2 * ZOOM_PAD, h: zoomedZone.h + 2 * ZOOM_PAD }
+    ? (() => {
+        const w = Math.max(zoomedZone.w + 2 * ZOOM_PAD, ZOOM_MIN_W);
+        const h = Math.max(zoomedZone.h + 2 * ZOOM_PAD, ZOOM_MIN_H);
+        const cx = zoomedZone.x + zoomedZone.w / 2;
+        const cy = zoomedZone.y + zoomedZone.h / 2;
+        const x = clamp(cx - w / 2, vbX, vbX + vbW - w);
+        const y = clamp(cy - h / 2, vbY, vbY + vbH - h);
+        return { x, y, w, h };
+      })()
     : null;
   const toSvgPoint = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
