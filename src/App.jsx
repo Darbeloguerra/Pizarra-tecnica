@@ -178,6 +178,7 @@ export default function EIIEditor() {
   const [showInfo, setShowInfo] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarTab, setSidebarTab] = useState("datos");
+  const [sidebarSource, setSidebarSource] = useState("zone"); // "zone" | "marker", solo relevante si hay ambas
   const [thresholds, setThresholds] = useState({ minDistHSR: 15, minDistSprint: 18, minDistVelMax: 25 });
   const [pngUrl, setPngUrl] = useState(null);
   const [exportIncludeData, setExportIncludeData] = useState(false);
@@ -237,13 +238,19 @@ export default function EIIEditor() {
     return { x: (clientX - rect.left) * sx + vbX, y: (clientY - rect.top) * sy + vbY };
   }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH, zoomVB]);
   // Imán invisible: al soltar un objeto puntual (portería, jugador, material...) cerca de
-  // cualquier "guía" de una zona (borde izq./der./arriba/abajo, centro, o el punto medio de
-  // cada lado), se alinea justo ahí — no solo al centro, así puedes dejar una portería
-  // pegada a un lado concreto o enfrentada con otra en el mismo lado, no solo en el centro.
+  // cualquier "guía" de la zona o subzona ACTIVA en ese momento (borde izq./der./arriba/abajo,
+  // centro, o el punto medio de cada lado) — solo la seleccionada, no todas las zonas del campo
+  // a la vez, para que no "salte" a una zona distinta sin querer.
+  const selectedZone = zones.find((z) => z.id === selectedZoneId) || null;
+  const activeMarker = activeObj?.kind === "marker" ? markers.find((m) => m.id === activeObj.id) || null : null;
   const snapToZoneCenter = useCallback(
     (x, y) => {
+      const targets = [];
+      if (selectedZone) targets.push(selectedZone);
+      if (activeMarker) targets.push(activeMarker);
+      if (targets.length === 0) return { x, y };
       let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
-      for (const z of zones) {
+      for (const z of targets) {
         const xGuides = [z.x, z.x + z.w / 2, z.x + z.w];
         const yGuides = [z.y, z.y + z.h / 2, z.y + z.h];
         for (const gx of xGuides) {
@@ -257,7 +264,7 @@ export default function EIIEditor() {
       }
       return { x: sx, y: sy };
     },
-    [zones]
+    [selectedZone, activeMarker]
   );
   useEffect(() => {
     (async () => {
@@ -939,7 +946,6 @@ export default function EIIEditor() {
     setLoadedTaskId(null);
     setZoomedZoneId(null);
   };
-  const selectedZone = zones.find((z) => z.id === selectedZoneId) || null;
   const stats = computeStats(selectedZone, players, thresholds);
   useEffect(() => {
     if (selectedZone) {
@@ -958,7 +964,6 @@ export default function EIIEditor() {
     setZoneDimensionMeters(axis, clampedM);
     setDimDraft((d) => ({ ...d, [axis]: clampedM.toFixed(1) }));
   };
-  const activeMarker = activeObj?.kind === "marker" ? markers.find((m) => m.id === activeObj.id) || null : null;
   useEffect(() => {
     if (activeMarker) {
       setMarkerDimDraft({ w: (activeMarker.w / SCALE).toFixed(1), h: (activeMarker.h / SCALE).toFixed(1) });
@@ -980,6 +985,11 @@ export default function EIIEditor() {
     setMarkers((ms) => ms.map((m) => (m.id === activeMarker.id ? { ...m, countsData: !m.countsData } : m)));
   };
   const activeMarkerStats = activeMarker?.countsData ? computeStats(activeMarker, players, thresholds) : null;
+  // Si hay zona seleccionada Y subzona con datos activados a la vez, se deja elegir cuál ver;
+  // si solo hay una de las dos disponibles, se muestra esa directamente.
+  const dualDataAvailable = !!selectedZone && !!activeMarkerStats;
+  const effectiveSource = dualDataAvailable ? sidebarSource : selectedZone ? "zone" : activeMarkerStats ? "marker" : null;
+  const dStats = effectiveSource === "marker" ? activeMarkerStats : stats;
   const distTag = (active, gateOk, distOk) => (active ? "Activa" : gateOk && !distOk ? "Forma" : "—");
   const variables = stats
     ? [
@@ -990,10 +1000,19 @@ export default function EIIEditor() {
         { key: "velmax", label: "Vel. máxima", tag: distTag(stats.velmaxActive, stats.quadrant === "velocidad", stats.velmaxActive) },
       ]
     : [];
+  const dVariables = dStats
+    ? [
+        { key: "dist", label: "Distancia total", tag: dStats.quadrant === "resistencia" ? "Dominante" : "—" },
+        { key: "acel", label: "Acel. / Decel.", tag: dStats.quadrant === "fuerza" ? "Dominante" : "—" },
+        { key: "hsr", label: "HSR", tag: distTag(dStats.hsrActive, dStats.quadrant === "velocidad", dStats.hsrActive) },
+        { key: "sprint", label: "Sprint", tag: distTag(dStats.sprintActive, dStats.quadrant === "velocidad", dStats.sprintActive) },
+        { key: "velmax", label: "Vel. máxima", tag: distTag(dStats.velmaxActive, dStats.quadrant === "velocidad", dStats.velmaxActive) },
+      ]
+    : [];
   const iconBtn = "flex flex-col items-center justify-center gap-0.5 px-2.5 py-1.5 rounded-lg text-[10px] font-medium border transition min-w-[56px]";
   const iconBtnOff = "bg-slate-900 border-slate-700 hover:border-slate-500 text-slate-300";
   const iconBtnOn = "bg-emerald-600 border-emerald-500 text-white";
-  const gateInputStyle = { background: "#122440", border: "1px solid #1A3050", color: "#F0F4FF" };
+  const gateInputStyle = { background: "#122440", border: "1px solid transparent", color: "#F0F4FF" };
   if (users === null) {
     return (
       <div className="h-screen w-full flex items-center justify-center text-sm" style={{ background: "#060D1A", color: "#8BA4C0" }}>
@@ -1026,6 +1045,10 @@ export default function EIIEditor() {
   if (!authedUser) {
     return (
       <div className="h-screen w-full flex items-center justify-center p-4" style={{ background: "#060D1A" }}>
+        <style>{`
+          .gate-input { transition: border-color .15s, box-shadow .15s; }
+          .gate-input:focus { border-color: #F5C518 !important; outline: none; box-shadow: 0 0 0 3px rgba(245,197,24,0.18); }
+        `}</style>
         <div className="w-full max-w-sm rounded-xl p-6" style={{ background: "#0E1E35", border: "1px solid #1A3050" }}>
           <h1 className="text-xl font-bold mb-1" style={{ color: "#F0F4FF" }}>Pizarra Técnica</h1>
           <p className="text-xs mb-5" style={{ color: "#8BA4C0" }}>Diseñador de tareas</p>
@@ -1035,7 +1058,7 @@ export default function EIIEditor() {
               <input
                 placeholder="Tu nombre" value={setupNameDraft}
                 onChange={(e) => setSetupNameDraft(e.target.value)}
-                className="w-full mb-2 px-3 py-2 rounded-md text-sm outline-none"
+                className="w-full mb-2 px-3 py-2 gate-input rounded-md text-sm outline-none"
                 style={gateInputStyle}
               />
               <div className="relative mb-3">
@@ -1043,7 +1066,7 @@ export default function EIIEditor() {
                   placeholder="PIN (4-8 dígitos)" inputMode="numeric" type={showSetupPin ? "text" : "password"} value={setupPinDraft}
                   onChange={(e) => setSetupPinDraft(e.target.value.replace(/\D/g, ""))}
                   onKeyDown={(e) => { if (e.key === "Enter") createFirstAdmin(); }}
-                  className="w-full px-3 py-2 pr-9 rounded-md text-sm tracking-widest outline-none"
+                  className="w-full px-3 py-2 pr-9 gate-input rounded-md text-sm tracking-widest outline-none"
                   style={gateInputStyle}
                 />
                 <button type="button" onClick={() => setShowSetupPin((v) => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs" style={{ color: "#8BA4C0" }}>
@@ -1062,7 +1085,7 @@ export default function EIIEditor() {
                   placeholder="PIN" inputMode="numeric" autoFocus type={showLoginPin ? "text" : "password"} value={pinInput}
                   onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ""))}
                   onKeyDown={(e) => { if (e.key === "Enter") tryLogin(); }}
-                  className="w-full px-3 py-2.5 pr-9 rounded-md text-lg text-center tracking-[8px] outline-none"
+                  className="w-full px-3 py-2.5 pr-9 gate-input rounded-md text-lg text-center tracking-[8px] outline-none"
                   style={gateInputStyle}
                 />
                 <button type="button" onClick={() => setShowLoginPin((v) => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs" style={{ color: "#8BA4C0" }}>
@@ -1087,7 +1110,7 @@ export default function EIIEditor() {
                     placeholder="XXXX-XXXX" value={recoveryCodeInput}
                     onChange={(e) => setRecoveryCodeInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") verifyRecoveryCode(); }}
-                    className="w-full mb-2 px-3 py-2 rounded-md text-sm tracking-widest uppercase outline-none"
+                    className="w-full mb-2 px-3 py-2 gate-input rounded-md text-sm tracking-widest uppercase outline-none"
                     style={gateInputStyle}
                   />
                   {authError && <p className="text-xs mb-2" style={{ color: "#EF4444" }}>{authError}</p>}
@@ -1110,7 +1133,7 @@ export default function EIIEditor() {
                       placeholder="Nuevo PIN (4-8 dígitos)" inputMode="numeric" autoFocus type={showRecoveryNewPin ? "text" : "password"} value={recoveryNewPin}
                       onChange={(e) => setRecoveryNewPin(e.target.value.replace(/\D/g, ""))}
                       onKeyDown={(e) => { if (e.key === "Enter") setNewAdminPinAfterRecovery(); }}
-                      className="w-full px-3 py-2 pr-9 rounded-md text-sm tracking-widest outline-none"
+                      className="w-full px-3 py-2 pr-9 gate-input rounded-md text-sm tracking-widest outline-none"
                       style={gateInputStyle}
                     />
                     <button type="button" onClick={() => setShowRecoveryNewPin((v) => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs" style={{ color: "#8BA4C0" }}>
@@ -1496,10 +1519,12 @@ export default function EIIEditor() {
                   const color = zStats.quadrant ? QUADRANT_COLOR[zStats.quadrant] : NEUTRAL_COLOR;
                   const isSel = z.id === selectedZoneId;
                   const labelText = `${(z.w / SCALE).toFixed(1)}×${(z.h / SCALE).toFixed(1)}m · EII ${zStats.eii !== null ? zStats.eii.toFixed(0) : "–"} · ${zStats.quadrant ? QUADRANT_LABEL[zStats.quadrant] : "sin jug."}`;
-                  const pillW = Math.min(labelText.length * 5.4 + 12, VB_W + 2 * MARGIN - z.x - 6);
-                  const pillH = 15;
+                  const pillH = Math.min(15, Math.max(z.h - 4, 8));
+                  // Nunca más ancha que la propia zona (con 3px de margen a cada lado): así jamás se sale del recuadro.
+                  const pillW = Math.max(Math.min(labelText.length * 5.4 + 12, z.w - 6), 10);
                   const pillX = z.x + 3;
                   const pillY = z.y + 3;
+                  const pillCx = pillX + pillW / 2, pillCy = pillY + pillH / 2;
                   return (
                     <g key={z.id}>
                       <rect
@@ -1515,11 +1540,17 @@ export default function EIIEditor() {
                         const cy = c.includes("n") ? z.y : z.y + z.h;
                         return <rect key={c} x={cx - 7} y={cy - 7} width={14} height={14} fill={color} stroke="#0f172a" strokeWidth={1.5} onPointerDown={startResize(z, c)} style={{ cursor: `${c}-resize` }} />;
                       })}
-                      {/* Etiqueta discreta, siempre dentro de la zona (esquina sup. izq.), no molesta a jugadores fuera del campo */}
-                      <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={3} fill="#0f172a" fillOpacity={0.68} pointerEvents="none" />
-                      <text x={pillX + 4} y={pillY + pillH / 2 + 3.5} fill="#f8fafc" fontSize="9" fontFamily="ui-monospace, monospace" pointerEvents="none">
-                        {labelText}
-                      </text>
+                      {/* Etiqueta discreta: nunca más ancha que la zona (recortada si hace falta), y siempre
+                          en horizontal aunque la vista esté girada (medio campo). */}
+                      <g transform={halfMode ? `rotate(-90 ${pillCx} ${pillCy})` : undefined}>
+                        <clipPath id={`zclip-${z.id}`}>
+                          <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={3} />
+                        </clipPath>
+                        <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={3} fill="#0f172a" fillOpacity={0.5} pointerEvents="none" />
+                        <text x={pillX + 4} y={pillY + pillH / 2 + 3} fill="#cbd5e1" fontSize="9" fontFamily="ui-monospace, monospace" pointerEvents="none" clipPath={`url(#zclip-${z.id})`}>
+                          {labelText}
+                        </text>
+                      </g>
                       {isSel && (
                         <text x={z.x + z.w - 6} y={z.y + 13} textAnchor="end" fill="#94a3b8" fontSize="14" onPointerDown={(e) => { e.stopPropagation(); removeZone(z.id); }} style={{ cursor: "pointer" }}>✕</text>
                       )}
@@ -1546,16 +1577,22 @@ export default function EIIEditor() {
                 )}
                 {markers.map((m) => {
                   const mStats = m.countsData ? computeStats(m, players, thresholds) : null;
+                  const mPillW = Math.max(Math.min(90, m.w - 6), 10);
+                  const mPillH = Math.min(13, Math.max(m.h - 4, 8));
+                  const mPillCx = m.x + 3 + mPillW / 2, mPillCy = m.y + 3 + mPillH / 2;
                   return (
                     <g key={m.id}>
                       <MarkerShape shape={m.shape || "rect"} x={m.x} y={m.y} w={m.w} h={m.h} color={m.color || "#f97316"} onPointerDown={startMoveMarker(m)} />
                       {mStats && (
-                        <>
-                          <rect x={m.x + 3} y={m.y + 3} width={Math.min(90, m.w - 6)} height={13} rx={3} fill="#0f172a" fillOpacity={0.75} pointerEvents="none" />
-                          <text x={m.x + 6} y={m.y + 12.5} fontSize="8" fontFamily="ui-monospace, monospace" fill={mStats.quadrant ? QUADRANT_COLOR[mStats.quadrant] : "#94a3b8"} pointerEvents="none">
+                        <g transform={halfMode ? `rotate(-90 ${mPillCx} ${mPillCy})` : undefined}>
+                          <clipPath id={`mclip-${m.id}`}>
+                            <rect x={m.x + 3} y={m.y + 3} width={mPillW} height={mPillH} rx={3} />
+                          </clipPath>
+                          <rect x={m.x + 3} y={m.y + 3} width={mPillW} height={mPillH} rx={3} fill="#0f172a" fillOpacity={0.5} pointerEvents="none" />
+                          <text x={m.x + 6} y={m.y + 3 + mPillH / 2 + 3} fontSize="8" fontFamily="ui-monospace, monospace" fill="#cbd5e1" pointerEvents="none" clipPath={`url(#mclip-${m.id})`}>
                             {mStats.eii !== null ? `${mStats.eii.toFixed(0)} m²` : "—"} {mStats.quadrant ? QUADRANT_LABEL[mStats.quadrant].slice(0, 4) : ""}
                           </text>
-                        </>
+                        </g>
                       )}
                       {isActive("marker", m.id) && (
                         <text x={m.x + m.w - 4} y={m.y + 14} textAnchor="end" fill="#f1f5f9" fontSize="13" onPointerDown={(e) => { e.stopPropagation(); removeMarker(m.id); }} style={{ cursor: "pointer" }}>✕</text>
@@ -1725,18 +1762,24 @@ export default function EIIEditor() {
           </div>
         </div>
         <aside className="w-64 shrink-0 border-l border-slate-800 flex flex-col">
-          {!selectedZone ? (
+          {!effectiveSource ? (
             <div className="p-4 flex-1 flex items-center justify-center text-center">
               <p className="text-xs text-slate-500">Toca una zona del campo,<br />o crea una con "Manual" / "Campo completo" / "1/2 campo".</p>
             </div>
           ) : (
             <>
               <div className="shrink-0 p-3 border-b border-slate-800 flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-slate-500">Demanda</span>
-                <span className="text-sm font-bold px-2.5 py-1 rounded-md text-white" style={{ background: stats.quadrant ? QUADRANT_COLOR[stats.quadrant] : "#475569" }}>
-                  {stats.quadrant ? QUADRANT_LABEL[stats.quadrant] : "—"}
+                <span className="text-[10px] uppercase tracking-widest text-slate-500">Demanda {effectiveSource === "marker" && "(subzona)"}</span>
+                <span className="text-sm font-bold px-2.5 py-1 rounded-md text-white" style={{ background: dStats.quadrant ? QUADRANT_COLOR[dStats.quadrant] : "#475569" }}>
+                  {dStats.quadrant ? QUADRANT_LABEL[dStats.quadrant] : "—"}
                 </span>
               </div>
+              {dualDataAvailable && (
+                <div className="shrink-0 flex gap-1 px-3 py-2 border-b border-slate-800">
+                  <button onClick={() => setSidebarSource("zone")} className={`flex-1 text-[11px] font-medium py-1 rounded ${sidebarSource === "zone" ? "bg-emerald-600 text-white" : "bg-slate-800 text-slate-400"}`}>Espacio principal</button>
+                  <button onClick={() => setSidebarSource("marker")} className={`flex-1 text-[11px] font-medium py-1 rounded ${sidebarSource === "marker" ? "bg-emerald-600 text-white" : "bg-slate-800 text-slate-400"}`}>Subzona</button>
+                </div>
+              )}
               <div className="shrink-0 flex border-b border-slate-800">
                 <button
                   onClick={() => setSidebarTab("datos")}
@@ -1752,8 +1795,11 @@ export default function EIIEditor() {
                 </button>
               </div>
               <div className="p-3 flex-1 min-h-0">
-                {sidebarTab === "datos" && (
+                {sidebarTab === "datos" && (() => {
+                  const dObj = effectiveSource === "marker" ? activeMarker : selectedZone;
+                  return (
                   <div className="space-y-3">
+                    {effectiveSource === "zone" && (
                     <div className="grid grid-cols-2 gap-2">
                       <label className="text-[10px] text-slate-400 flex flex-col gap-0.5">
                         Ancho (m)
@@ -1778,38 +1824,39 @@ export default function EIIEditor() {
                         />
                       </label>
                     </div>
+                    )}
                     <div className="grid grid-cols-2 gap-y-1.5 text-xs border-t border-slate-800 pt-2">
                       <span className="text-slate-400">Área</span>
-                      <span className="text-right font-mono">{stats.areaM2.toFixed(0)} m²</span>
+                      <span className="text-right font-mono">{dStats.areaM2.toFixed(0)} m²</span>
                       <span className="text-slate-400">EII</span>
-                      <span className="text-right font-mono text-emerald-400 font-semibold">{stats.eii !== null ? `${stats.eii.toFixed(1)} m²/jug` : "—"}</span>
+                      <span className="text-right font-mono text-emerald-400 font-semibold">{dStats.eii !== null ? `${dStats.eii.toFixed(1)} m²/jug` : "—"}</span>
                       <span className="text-slate-400">Jug/equipo</span>
-                      <span className="text-right font-mono">{stats.teamCount || "—"}</span>
+                      <span className="text-right font-mono">{dStats.teamCount || "—"}</span>
                       <span className="text-slate-400">Dentro</span>
                       <span className="text-right font-mono text-[10px]">
-                        {stats.inside.length}: {TEAMS.map((t) => (
-                          <span key={t.key} style={{ color: t.color }}>●{stats.insideByTeam[t.key]} </span>
+                        {dStats.inside.length}: {TEAMS.map((t) => (
+                          <span key={t.key} style={{ color: t.color }}>●{dStats.insideByTeam[t.key]} </span>
                         ))}
-                        <span style={{ color: COMODIN_COLOR }}>●{stats.insideByTeam.comodin}</span>
+                        <span style={{ color: COMODIN_COLOR }}>●{dStats.insideByTeam.comodin}</span>
                       </span>
                       <span className="text-slate-400">Rol</span>
                       <span className="text-right font-mono text-[10px]">
-                        <span className="text-green-500">🟢{stats.poseedores}</span> · <span className="text-red-500">🔴{stats.defensores}</span>
+                        <span className="text-green-500">🟢{dStats.poseedores}</span> · <span className="text-red-500">🔴{dStats.defensores}</span>
                       </span>
                       <span className="text-slate-400">Porteros</span>
                       <span className="text-right font-mono text-[10px] text-slate-400">
-                        {goalkeepers.filter((k) => selectedZone && k.x >= selectedZone.x && k.x <= selectedZone.x + selectedZone.w && k.y >= selectedZone.y && k.y <= selectedZone.y + selectedZone.h).length}
+                        {goalkeepers.filter((k) => dObj && k.x >= dObj.x && k.x <= dObj.x + dObj.w && k.y >= dObj.y && k.y <= dObj.y + dObj.h).length}
                         <span className="text-slate-600"> (no cuentan en el EII)</span>
                       </span>
                     </div>
-                    {(stats.caveatSinInteraccion || stats.caveatFueraDeTabla) && (
+                    {(dStats.caveatSinInteraccion || dStats.caveatFueraDeTabla) && (
                       <p className="text-[10px] text-amber-400/90 leading-snug border-t border-slate-800 pt-2">
-                        {stats.caveatSinInteraccion && "⚠ 1 solo jugador: EII no interpretable. "}
-                        {stats.caveatFueraDeTabla && "⚠ Fuera de tabla (>10/equipo)."}
+                        {dStats.caveatSinInteraccion && "⚠ 1 solo jugador: EII no interpretable. "}
+                        {dStats.caveatFueraDeTabla && "⚠ Fuera de tabla (>10/equipo)."}
                       </p>
                     )}
                     <div className="border-t border-slate-800 pt-2 space-y-1">
-                      {variables.map((v) => (
+                      {dVariables.map((v) => (
                         <div key={v.key} className="flex items-center justify-between text-xs px-1.5 py-1 rounded bg-slate-800/50">
                           <span>{v.label}</span>
                           <span className="font-mono text-[11px] text-slate-300">{v.tag}</span>
@@ -1817,10 +1864,11 @@ export default function EIIEditor() {
                       ))}
                     </div>
                   </div>
-                )}
-                {sidebarTab === "dosis" && stats.playerBand !== null && (
+                  );
+                })()}
+                {sidebarTab === "dosis" && dStats.playerBand !== null && (
                   (() => {
-                    const d = DOSAGE_BY_BAND[stats.playerBand];
+                    const d = DOSAGE_BY_BAND[dStats.playerBand];
                     return (
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 gap-y-1.5 text-xs">
@@ -1840,13 +1888,13 @@ export default function EIIEditor() {
                           )}
                         </div>
                         <p className="text-[10px] text-slate-500 leading-snug border-t border-slate-800 pt-2">
-                          Para no desviarte de "{QUADRANT_LABEL[stats.quadrant] || "—"}": alargar la duración empuja hacia resistencia; acortar el descanso, también. Tabla 4.3, Castellano &amp; Casamichana (2016), pág. 143.
+                          Para no desviarte de "{QUADRANT_LABEL[dStats.quadrant] || "—"}": alargar la duración empuja hacia resistencia; acortar el descanso, también. Tabla 4.3, Castellano &amp; Casamichana (2016), pág. 143.
                         </p>
                       </div>
                     );
                   })()
                 )}
-                {sidebarTab === "dosis" && stats.playerBand === null && (
+                {sidebarTab === "dosis" && dStats.playerBand === null && (
                   <p className="text-xs text-slate-500">Añade jugadores a la zona para calcular la dosis.</p>
                 )}
               </div>
