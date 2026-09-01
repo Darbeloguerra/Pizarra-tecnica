@@ -24,7 +24,10 @@ const PLAYER_R = 11;
 const MIN_ZONE_PX = 3 * SCALE;
 const MARGIN_M = 8;
 const MARGIN = MARGIN_M * SCALE;
+const GRID = 1 * SCALE; // rejilla invisible de 1 m para alinear zonas
+const CENTER_SNAP = 7; // px de tolerancia para "imantar" objetos al centro de una zona
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const snapGrid = (v) => Math.round(v / GRID) * GRID;
 const QUADRANT_COLOR = {
   fuerza: "#64748b",
   resistencia: "#e11d48",
@@ -222,6 +225,21 @@ export default function EIIEditor() {
     const sy = vbH / rect.height;
     return { x: (clientX - rect.left) * sx + vbX, y: (clientY - rect.top) * sy + vbY };
   }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH]);
+  // Imán invisible: si un objeto puntual (portería, jugador, material...) se suelta cerca del
+  // eje central (horizontal o vertical) de cualquier zona, se alinea justo a ese eje —
+  // así es fácil centrar una portería o dejar dos enfrentadas en el mismo eje.
+  const snapToZoneCenter = useCallback(
+    (x, y) => {
+      let sx = x, sy = y;
+      for (const z of zones) {
+        const cx = z.x + z.w / 2, cy = z.y + z.h / 2;
+        if (Math.abs(x - cx) < CENTER_SNAP) sx = cx;
+        if (Math.abs(y - cy) < CENTER_SNAP) sy = cy;
+      }
+      return { x: sx, y: sy };
+    },
+    [zones]
+  );
   useEffect(() => {
     (async () => {
       try {
@@ -253,30 +271,32 @@ export default function EIIEditor() {
       if (!dragRef.current) return;
       const p = toSvgPoint(e.clientX, e.clientY);
       const d = dragRef.current;
+      const gridOn = viewMode !== "blank";
+      const sg = (v) => (gridOn ? snapGrid(v) : v);
       if (d.type === "create") {
-        const x = Math.min(d.startX, p.x);
-        const y = Math.min(d.startY, p.y);
-        const w = Math.abs(p.x - d.startX);
-        const h = Math.abs(p.y - d.startY);
+        const x = sg(Math.min(d.startX, p.x));
+        const y = sg(Math.min(d.startY, p.y));
+        const w = sg(Math.abs(p.x - d.startX));
+        const h = sg(Math.abs(p.y - d.startY));
         setDraftZone({ x, y, w, h });
       } else if (d.type === "moveZone") {
         setZones((zs) =>
-          zs.map((z) => (z.id === d.id ? { ...z, x: clamp(p.x - d.offX, 0, VB_W - z.w), y: clamp(p.y - d.offY, 0, VB_H - z.h) } : z))
+          zs.map((z) => (z.id === d.id ? { ...z, x: sg(clamp(p.x - d.offX, 0, VB_W - z.w)), y: sg(clamp(p.y - d.offY, 0, VB_H - z.h)) } : z))
         );
       } else if (d.type === "resize") {
         setZones((zs) =>
           zs.map((z) => {
             if (z.id !== d.id) return z;
             let { x, y, w, h } = d.orig;
-            if (d.corner.includes("e")) w = clamp(p.x - x, MIN_ZONE_PX, VB_W - x);
-            if (d.corner.includes("s")) h = clamp(p.y - y, MIN_ZONE_PX, VB_H - y);
+            if (d.corner.includes("e")) w = sg(clamp(p.x - x, MIN_ZONE_PX, VB_W - x));
+            if (d.corner.includes("s")) h = sg(clamp(p.y - y, MIN_ZONE_PX, VB_H - y));
             if (d.corner.includes("w")) {
-              const newX = clamp(p.x, 0, d.orig.x + d.orig.w - MIN_ZONE_PX);
+              const newX = sg(clamp(p.x, 0, d.orig.x + d.orig.w - MIN_ZONE_PX));
               w = d.orig.x + d.orig.w - newX;
               x = newX;
             }
             if (d.corner.includes("n")) {
-              const newY = clamp(p.y, 0, d.orig.y + d.orig.h - MIN_ZONE_PX);
+              const newY = sg(clamp(p.y, 0, d.orig.y + d.orig.h - MIN_ZONE_PX));
               h = d.orig.y + d.orig.h - newY;
               y = newY;
             }
@@ -285,29 +305,49 @@ export default function EIIEditor() {
         );
       } else if (d.type === "movePlayer") {
         setPlayers((ps) =>
-          ps.map((pl) => (pl.id === d.id ? { ...pl, x: clamp(p.x - d.offX, -MARGIN + PLAYER_R, VB_W + MARGIN - PLAYER_R), y: clamp(p.y - d.offY, -MARGIN + PLAYER_R, VB_H + MARGIN - PLAYER_R) } : pl))
+          ps.map((pl) => {
+            if (pl.id !== d.id) return pl;
+            const raw = { x: clamp(p.x - d.offX, -MARGIN + PLAYER_R, VB_W + MARGIN - PLAYER_R), y: clamp(p.y - d.offY, -MARGIN + PLAYER_R, VB_H + MARGIN - PLAYER_R) };
+            return { ...pl, ...snapToZoneCenter(raw.x, raw.y) };
+          })
         );
       } else if (d.type === "moveBall") {
-        setBalls((bs) => bs.map((b) => (b.id === d.id ? { ...b, x: clamp(p.x - d.offX, -MARGIN + 8, VB_W + MARGIN - 8), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) } : b)));
+        setBalls((bs) => bs.map((b) => {
+          if (b.id !== d.id) return b;
+          const raw = { x: clamp(p.x - d.offX, -MARGIN + 8, VB_W + MARGIN - 8), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) };
+          return { ...b, ...snapToZoneCenter(raw.x, raw.y) };
+        }));
       } else if (d.type === "moveKeeper") {
-        setGoalkeepers((ks) => ks.map((k) => (k.id === d.id ? { ...k, x: clamp(p.x - d.offX, -MARGIN + PLAYER_R, VB_W + MARGIN - PLAYER_R), y: clamp(p.y - d.offY, -MARGIN + PLAYER_R, VB_H + MARGIN - PLAYER_R) } : k)));
+        setGoalkeepers((ks) => ks.map((k) => {
+          if (k.id !== d.id) return k;
+          const raw = { x: clamp(p.x - d.offX, -MARGIN + PLAYER_R, VB_W + MARGIN - PLAYER_R), y: clamp(p.y - d.offY, -MARGIN + PLAYER_R, VB_H + MARGIN - PLAYER_R) };
+          return { ...k, ...snapToZoneCenter(raw.x, raw.y) };
+        }));
       } else if (d.type === "moveGoal") {
-        setMiniGoals((gs) => gs.map((g) => (g.id === d.id ? { ...g, x: clamp(p.x - d.offX, -MARGIN + 20, VB_W + MARGIN - 20), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) } : g)));
+        setMiniGoals((gs) => gs.map((g) => {
+          if (g.id !== d.id) return g;
+          const raw = { x: clamp(p.x - d.offX, -MARGIN + 20, VB_W + MARGIN - 20), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) };
+          return { ...g, ...snapToZoneCenter(raw.x, raw.y) };
+        }));
       } else if (d.type === "drawLine") {
         setLineDraft({ x1: d.startX, y1: d.startY, x2: p.x, y2: p.y });
       } else if (d.type === "drawMarker") {
-        const x = Math.min(d.startX, p.x);
-        const y = Math.min(d.startY, p.y);
-        const w = Math.abs(p.x - d.startX);
-        const h = Math.abs(p.y - d.startY);
+        const x = sg(Math.min(d.startX, p.x));
+        const y = sg(Math.min(d.startY, p.y));
+        const w = sg(Math.abs(p.x - d.startX));
+        const h = sg(Math.abs(p.y - d.startY));
         setMarkerDraft({ x, y, w, h });
       } else if (d.type === "moveLine") {
         setLines((ls) => ls.map((l) => (l.id === d.id ? { ...l, x1: l.x1 + (p.x - d.lastX), y1: l.y1 + (p.y - d.lastY), x2: l.x2 + (p.x - d.lastX), y2: l.y2 + (p.y - d.lastY) } : l)));
         dragRef.current = { ...d, lastX: p.x, lastY: p.y };
       } else if (d.type === "moveMarker") {
-        setMarkers((ms) => ms.map((m) => (m.id === d.id ? { ...m, x: clamp(p.x - d.offX, -MARGIN, VB_W + MARGIN - m.w), y: clamp(p.y - d.offY, -MARGIN, VB_H + MARGIN - m.h) } : m)));
+        setMarkers((ms) => ms.map((m) => (m.id === d.id ? { ...m, x: sg(clamp(p.x - d.offX, -MARGIN, VB_W + MARGIN - m.w)), y: sg(clamp(p.y - d.offY, -MARGIN, VB_H + MARGIN - m.h)) } : m)));
       } else if (d.type === "moveMaterial") {
-        setMaterials((ms) => ms.map((m) => (m.id === d.id ? { ...m, x: clamp(p.x - d.offX, -MARGIN + 10, VB_W + MARGIN - 10), y: clamp(p.y - d.offY, -MARGIN + 10, VB_H + MARGIN - 10) } : m)));
+        setMaterials((ms) => ms.map((m) => {
+          if (m.id !== d.id) return m;
+          const raw = { x: clamp(p.x - d.offX, -MARGIN + 10, VB_W + MARGIN - 10), y: clamp(p.y - d.offY, -MARGIN + 10, VB_H + MARGIN - 10) };
+          return { ...m, ...snapToZoneCenter(raw.x, raw.y) };
+        }));
       } else if (d.type === "moveText") {
         setTexts((ts) => ts.map((t) => (t.id === d.id ? { ...t, x: clamp(p.x - d.offX, -MARGIN, VB_W + MARGIN), y: clamp(p.y - d.offY, -MARGIN, VB_H + MARGIN) } : t)));
       }
@@ -354,7 +394,7 @@ export default function EIIEditor() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId]);
+  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId, viewMode, snapToZoneCenter]);
   const startCreate = (e) => {
     if (drawTool === "line" || drawTool === "arrow") {
       const p = toSvgPoint(e.clientX, e.clientY);
@@ -1280,11 +1320,11 @@ export default function EIIEditor() {
               <MousePointer2 size={16} />
             </button>
             <button
-              onClick={() => setViewMode((v) => (v === "half" ? "full" : "half"))}
-              title={viewMode === "half" ? "Ver campo completo" : "Ampliar 1/2 campo (girado)"}
-              className={`w-9 h-9 rounded-md border flex items-center justify-center ${viewMode === "half" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300"}`}
+              onClick={() => setViewMode((v) => (v === "full" ? "half" : v === "half" ? "blank" : "full"))}
+              title={viewMode === "full" ? "Vista: campo completo (toca para 1/2 campo)" : viewMode === "half" ? "Vista: 1/2 campo girado (toca para sin líneas)" : "Vista: solo césped (toca para campo completo)"}
+              className={`w-9 h-9 rounded-md border flex items-center justify-center text-[10px] font-bold ${viewMode !== "full" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300"}`}
             >
-              <Columns2 size={16} />
+              {viewMode === "full" ? <Rows2 size={16} /> : viewMode === "half" ? "1/2" : "∅"}
             </button>
             <div className="w-8 border-t border-slate-800 my-0.5" />
             <button
@@ -1384,28 +1424,32 @@ export default function EIIEditor() {
                 {Array.from({ length: 10 }).map((_, i) => (
                   <rect key={i} x={(PITCH_W_M / 10) * i * SCALE} y={0} width={(PITCH_W_M / 10) * SCALE} height={VB_H} fill={i % 2 === 0 ? "#2d6a3e" : "#28623a"} />
                 ))}
-                <g stroke="#e8f5e9" strokeWidth={3} fill="none" opacity={0.85}>
-                  <rect x={4} y={4} width={VB_W - 8} height={VB_H - 8} />
-                  <line x1={VB_W / 2} y1={4} x2={VB_W / 2} y2={VB_H - 4} />
-                  <circle cx={VB_W / 2} cy={VB_H / 2} r={91} />
-                  <rect x={4} y={VB_H / 2 - 200} width={165} height={400} />
-                  <rect x={4} y={VB_H / 2 - 92} width={55} height={184} />
-                  <rect x={VB_W - 169} y={VB_H / 2 - 200} width={165} height={400} />
-                  <rect x={VB_W - 59} y={VB_H / 2 - 92} width={55} height={184} />
-                </g>
-                {[0, VB_W].map((goalX) => {
-                  const depth = 22;
-                  const gw = 36.6; 
-                  const dir = goalX === 0 ? -1 : 1;
-                  return (
-                    <g key={goalX}>
-                      <rect x={goalX + (dir < 0 ? -depth : 0)} y={VB_H / 2 - gw} width={depth} height={gw * 2} fill="rgba(255,255,255,0.10)" stroke="#f8fafc" strokeWidth={2.5} />
-                      {Array.from({ length: 6 }).map((_, i) => (
-                        <line key={i} x1={goalX + (dir < 0 ? -depth : 0)} y1={VB_H / 2 - gw + (i * gw * 2) / 5} x2={goalX + (dir < 0 ? 0 : depth)} y2={VB_H / 2 - gw + (i * gw * 2) / 5} stroke="#f8fafc" strokeWidth={0.8} opacity={0.5} />
-                      ))}
+                {viewMode !== "blank" && (
+                  <>
+                    <g stroke="#e8f5e9" strokeWidth={3} fill="none" opacity={0.85}>
+                      <rect x={4} y={4} width={VB_W - 8} height={VB_H - 8} />
+                      <line x1={VB_W / 2} y1={4} x2={VB_W / 2} y2={VB_H - 4} />
+                      <circle cx={VB_W / 2} cy={VB_H / 2} r={91} />
+                      <rect x={4} y={VB_H / 2 - 200} width={165} height={400} />
+                      <rect x={4} y={VB_H / 2 - 92} width={55} height={184} />
+                      <rect x={VB_W - 169} y={VB_H / 2 - 200} width={165} height={400} />
+                      <rect x={VB_W - 59} y={VB_H / 2 - 92} width={55} height={184} />
                     </g>
-                  );
-                })}
+                    {[0, VB_W].map((goalX) => {
+                      const depth = 22;
+                      const gw = 36.6;
+                      const dir = goalX === 0 ? -1 : 1;
+                      return (
+                        <g key={goalX}>
+                          <rect x={goalX + (dir < 0 ? -depth : 0)} y={VB_H / 2 - gw} width={depth} height={gw * 2} fill="rgba(255,255,255,0.10)" stroke="#f8fafc" strokeWidth={2.5} />
+                          {Array.from({ length: 6 }).map((_, i) => (
+                            <line key={i} x1={goalX + (dir < 0 ? -depth : 0)} y1={VB_H / 2 - gw + (i * gw * 2) / 5} x2={goalX + (dir < 0 ? 0 : depth)} y2={VB_H / 2 - gw + (i * gw * 2) / 5} stroke="#f8fafc" strokeWidth={0.8} opacity={0.5} />
+                          ))}
+                        </g>
+                      );
+                    })}
+                  </>
+                )}
                 {zones.map((z) => {
                   const zStats = computeStats(z, players, thresholds);
                   const color = zStats.quadrant ? QUADRANT_COLOR[zStats.quadrant] : NEUTRAL_COLOR;
