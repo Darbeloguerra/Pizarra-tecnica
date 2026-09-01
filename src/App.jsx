@@ -202,6 +202,7 @@ export default function EIIEditor() {
   // (sin invadir nada del campo contrario) y la gira 90° para que ocupe el ancho
   // horizontal completo. Portería arriba, línea de medio campo abajo.
   const [viewMode, setViewMode] = useState("full");
+  const [zoomedZoneId, setZoomedZoneId] = useState(null);
   const halfMode = viewMode === "half";
   const vbX = -MARGIN;
   const vbY = -MARGIN;
@@ -212,8 +213,18 @@ export default function EIIEditor() {
   const halfDispW = VB_H + 2 * MARGIN;
   const halfDispH = VB_W / 2 + MARGIN;
   const halfTransform = `matrix(0,1,-1,0,${VB_H + MARGIN},${MARGIN})`;
+  const ZOOM_PAD = 2 * SCALE; // 2 m de aire alrededor de la zona al hacer zoom
+  const zoomedZone = zoomedZoneId ? zones.find((z) => z.id === zoomedZoneId) || null : null;
+  const zoomVB = zoomedZone
+    ? { x: zoomedZone.x - ZOOM_PAD, y: zoomedZone.y - ZOOM_PAD, w: zoomedZone.w + 2 * ZOOM_PAD, h: zoomedZone.h + 2 * ZOOM_PAD }
+    : null;
   const toSvgPoint = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
+    if (zoomVB) {
+      const sx = zoomVB.w / rect.width;
+      const sy = zoomVB.h / rect.height;
+      return { x: (clientX - rect.left) * sx + zoomVB.x, y: (clientY - rect.top) * sy + zoomVB.y };
+    }
     if (halfMode) {
       const sx = halfDispW / rect.width;
       const sy = halfDispH / rect.height;
@@ -224,17 +235,25 @@ export default function EIIEditor() {
     const sx = vbW / rect.width;
     const sy = vbH / rect.height;
     return { x: (clientX - rect.left) * sx + vbX, y: (clientY - rect.top) * sy + vbY };
-  }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH]);
-  // Imán invisible: si un objeto puntual (portería, jugador, material...) se suelta cerca del
-  // eje central (horizontal o vertical) de cualquier zona, se alinea justo a ese eje —
-  // así es fácil centrar una portería o dejar dos enfrentadas en el mismo eje.
+  }, [halfMode, vbW, vbH, vbX, vbY, halfDispW, halfDispH, zoomVB]);
+  // Imán invisible: al soltar un objeto puntual (portería, jugador, material...) cerca de
+  // cualquier "guía" de una zona (borde izq./der./arriba/abajo, centro, o el punto medio de
+  // cada lado), se alinea justo ahí — no solo al centro, así puedes dejar una portería
+  // pegada a un lado concreto o enfrentada con otra en el mismo lado, no solo en el centro.
   const snapToZoneCenter = useCallback(
     (x, y) => {
-      let sx = x, sy = y;
+      let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
       for (const z of zones) {
-        const cx = z.x + z.w / 2, cy = z.y + z.h / 2;
-        if (Math.abs(x - cx) < CENTER_SNAP) sx = cx;
-        if (Math.abs(y - cy) < CENTER_SNAP) sy = cy;
+        const xGuides = [z.x, z.x + z.w / 2, z.x + z.w];
+        const yGuides = [z.y, z.y + z.h / 2, z.y + z.h];
+        for (const gx of xGuides) {
+          const d = Math.abs(x - gx);
+          if (d < bestDx) { bestDx = d; sx = gx; }
+        }
+        for (const gy of yGuides) {
+          const d = Math.abs(y - gy);
+          if (d < bestDy) { bestDy = d; sy = gy; }
+        }
       }
       return { x: sx, y: sy };
     },
@@ -361,6 +380,7 @@ export default function EIIEditor() {
             setZones((zs) => [...zs, { id, ...dz }]);
             setSelectedZoneId(id);
             setNextZoneId((n) => n + 1);
+            if (viewMode === "blank") setZoomedZoneId(id);
           }
           return null;
         });
@@ -453,6 +473,7 @@ export default function EIIEditor() {
   const removeZone = (id) => {
     setZones((zs) => zs.filter((z) => z.id !== id));
     setSelectedZoneId((sel) => (sel === id ? null : sel));
+    setZoomedZoneId((z) => (z === id ? null : z));
   };
   const duplicateZone = () => {
     const z = zones.find((z) => z.id === selectedZoneId);
@@ -916,6 +937,7 @@ export default function EIIEditor() {
     setActiveObj(null);
     setPngUrl(null);
     setLoadedTaskId(null);
+    setZoomedZoneId(null);
   };
   const selectedZone = zones.find((z) => z.id === selectedZoneId) || null;
   const stats = computeStats(selectedZone, players, thresholds);
@@ -953,6 +975,11 @@ export default function EIIEditor() {
     setMarkers((ms) => ms.map((m) => (m.id === activeMarker.id ? { ...m, [axis]: clampedPx } : m)));
     setMarkerDimDraft((d) => ({ ...d, [axis]: (clampedPx / SCALE).toFixed(1) }));
   };
+  const toggleMarkerCountsData = () => {
+    if (!activeMarker) return;
+    setMarkers((ms) => ms.map((m) => (m.id === activeMarker.id ? { ...m, countsData: !m.countsData } : m)));
+  };
+  const activeMarkerStats = activeMarker?.countsData ? computeStats(activeMarker, players, thresholds) : null;
   const distTag = (active, gateOk, distOk) => (active ? "Activa" : gateOk && !distOk ? "Forma" : "—");
   const variables = stats
     ? [
@@ -1138,6 +1165,11 @@ export default function EIIEditor() {
             📝 {loadedTask.name}
           </span>
         )}
+        {zoomedZone && (
+          <button onClick={() => setZoomedZoneId(null)} className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 text-white font-medium">
+            🔍 Salir del zoom
+          </button>
+        )}
         <span className="text-[10px] text-slate-500 uppercase tracking-widest hidden md:inline">Diseñador de tareas · Sub-19 · Tabla 4.2, Castellano &amp; Casamichana (2016)</span>
         <div className="ml-auto flex items-center gap-1.5">
           {authedUser?.isAdmin && (
@@ -1221,7 +1253,7 @@ export default function EIIEditor() {
         </div>
       )}
       {activeMarker && (
-        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2 text-xs">
+        <div className="shrink-0 px-3 py-2 bg-slate-900/80 border-b border-slate-800 flex flex-wrap items-center gap-2 text-xs">
           <span className="text-slate-400">Marca — Ancho (m):</span>
           <input
             type="number" step="0.5" min="0.3" value={markerDimDraft.w}
@@ -1238,6 +1270,15 @@ export default function EIIEditor() {
             onKeyDown={(e) => { if (e.key === "Enter") { commitMarkerDim("h"); e.target.blur(); } }}
             className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-slate-100"
           />
+          <label className="flex items-center gap-1.5 text-slate-400 select-none ml-2">
+            <input type="checkbox" checked={!!activeMarker.countsData} onChange={toggleMarkerCountsData} />
+            Contar datos (EII) de esta subzona
+          </label>
+          {activeMarkerStats && (
+            <span className="text-emerald-400 font-mono text-[11px]">
+              {activeMarkerStats.eii !== null ? `${activeMarkerStats.eii.toFixed(1)} m²/jug` : "—"} · {activeMarkerStats.quadrant ? QUADRANT_LABEL[activeMarkerStats.quadrant] : "sin jug."}
+            </span>
+          )}
         </div>
       )}
       {pngUrl && (
@@ -1320,7 +1361,7 @@ export default function EIIEditor() {
               <MousePointer2 size={16} />
             </button>
             <button
-              onClick={() => setViewMode((v) => (v === "full" ? "half" : v === "half" ? "blank" : "full"))}
+              onClick={() => { setZoomedZoneId(null); setViewMode((v) => (v === "full" ? "half" : v === "half" ? "blank" : "full")); }}
               title={viewMode === "full" ? "Vista: campo completo (toca para 1/2 campo)" : viewMode === "half" ? "Vista: 1/2 campo girado (toca para sin líneas)" : "Vista: solo césped (toca para campo completo)"}
               className={`w-9 h-9 rounded-md border flex items-center justify-center text-[10px] font-bold ${viewMode !== "full" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300"}`}
             >
@@ -1405,7 +1446,7 @@ export default function EIIEditor() {
           <div className="flex-1 min-w-0 min-h-0 rounded-lg border border-slate-800 bg-black/30 overflow-hidden">
             <svg
               ref={svgRef}
-              viewBox={halfMode ? `0 0 ${halfDispW} ${halfDispH}` : `${vbX} ${vbY} ${vbW} ${vbH}`}
+              viewBox={zoomVB ? `${zoomVB.x} ${zoomVB.y} ${zoomVB.w} ${zoomVB.h}` : halfMode ? `0 0 ${halfDispW} ${halfDispH}` : `${vbX} ${vbY} ${vbW} ${vbH}`}
               preserveAspectRatio="xMidYMid meet"
               className="w-full h-full block cursor-crosshair"
               style={{ touchAction: "none" }}
@@ -1418,7 +1459,7 @@ export default function EIIEditor() {
                   </marker>
                 ))}
               </defs>
-              <g transform={halfMode ? halfTransform : undefined}>
+              <g transform={!zoomVB && halfMode ? halfTransform : undefined}>
                 <rect x={-MARGIN} y={-MARGIN} width={VB_W + 2 * MARGIN} height={VB_H + 2 * MARGIN} fill="#1c2a1f" />
                 <text x={-MARGIN + 6} y={-MARGIN + 16} fontSize="11" fill="#4b6350" fontFamily="ui-monospace, monospace">Espacio externo</text>
                 {Array.from({ length: 10 }).map((_, i) => (
@@ -1503,14 +1544,25 @@ export default function EIIEditor() {
                     })()}
                   </g>
                 )}
-                {markers.map((m) => (
-                  <g key={m.id}>
-                    <MarkerShape shape={m.shape || "rect"} x={m.x} y={m.y} w={m.w} h={m.h} color={m.color || "#f97316"} onPointerDown={startMoveMarker(m)} />
-                    {isActive("marker", m.id) && (
-                      <text x={m.x + m.w - 4} y={m.y + 14} textAnchor="end" fill="#f1f5f9" fontSize="13" onPointerDown={(e) => { e.stopPropagation(); removeMarker(m.id); }} style={{ cursor: "pointer" }}>✕</text>
-                    )}
-                  </g>
-                ))}
+                {markers.map((m) => {
+                  const mStats = m.countsData ? computeStats(m, players, thresholds) : null;
+                  return (
+                    <g key={m.id}>
+                      <MarkerShape shape={m.shape || "rect"} x={m.x} y={m.y} w={m.w} h={m.h} color={m.color || "#f97316"} onPointerDown={startMoveMarker(m)} />
+                      {mStats && (
+                        <>
+                          <rect x={m.x + 3} y={m.y + 3} width={Math.min(90, m.w - 6)} height={13} rx={3} fill="#0f172a" fillOpacity={0.75} pointerEvents="none" />
+                          <text x={m.x + 6} y={m.y + 12.5} fontSize="8" fontFamily="ui-monospace, monospace" fill={mStats.quadrant ? QUADRANT_COLOR[mStats.quadrant] : "#94a3b8"} pointerEvents="none">
+                            {mStats.eii !== null ? `${mStats.eii.toFixed(0)} m²` : "—"} {mStats.quadrant ? QUADRANT_LABEL[mStats.quadrant].slice(0, 4) : ""}
+                          </text>
+                        </>
+                      )}
+                      {isActive("marker", m.id) && (
+                        <text x={m.x + m.w - 4} y={m.y + 14} textAnchor="end" fill="#f1f5f9" fontSize="13" onPointerDown={(e) => { e.stopPropagation(); removeMarker(m.id); }} style={{ cursor: "pointer" }}>✕</text>
+                      )}
+                    </g>
+                  );
+                })}
                 {markerDraft && markerDraft.w > 0 && (
                   <MarkerShape shape={markerShape} x={markerDraft.x} y={markerDraft.y} w={markerDraft.w} h={markerDraft.h} color={drawColor} />
                 )}
