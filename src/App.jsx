@@ -26,6 +26,7 @@ const MARGIN_M = 8;
 const MARGIN = MARGIN_M * SCALE;
 const GRID = 1 * SCALE; // rejilla invisible de 1 m para alinear zonas
 const CENTER_SNAP = 14; // px de tolerancia para "imantar" objetos a las guías de una zona
+const GOAL_RESIST = 2.5 * SCALE; // "empuje" extra (2.5 m) para que una portería cruce la línea de una zona
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const snapGrid = (v) => Math.round(v / GRID) * GRID;
 const QUADRANT_COLOR = {
@@ -314,41 +315,56 @@ export default function EIIEditor() {
     },
     [zones]
   );
-  // Imán de la miniportería: a diferencia de jugadores/balones (que se centran sobre la
-  // guía), una portería tiene cuerpo (boca + fondo) y NO debe quedar a caballo de la línea.
-  // Al acercarla a un borde real de la zona activa, se coloca por FUERA del espacio con el
-  // lado más cercano pegado exactamente a esa línea (nunca centrada sobre ella). Si en cambio
-  // se acerca a una guía interna (cuartos/centro, que no son un borde real), sí se centra
-  // sobre esa guía como el resto de objetos. Los cálculos usan el rectángulo de la portería
-  // (40×16) ya rotado, para que el lado que toca la línea sea el correcto en cualquier ángulo.
+  // Portería = barrera con resistencia, no un imán de proximidad. Requisito: "ninguna
+  // superficie de la portería debe entrar en el espacio de primeras": la primera reacción al
+  // acercarla a una línea del espacio o subespacio SELECCIONADO es frenarla justo en el borde
+  // (fuera, sin invadir). Solo si el usuario sigue presionando más allá de GOAL_RESIST se le
+  // deja atravesar esa línea; a partir de ahí queda libre el resto del arrastre (bandera
+  // breachX/breachY en el propio "d" del drag, para no volver a frenar hasta soltar y volver
+  // a coger la portería). Una vez dentro (o si ya empezaba dentro), sigue imantándose a las
+  // guías internas (cuartos/centro) de la zona, igual que antes.
   const snapGoalPos = useCallback(
-    (x, y, rotation) => {
+    (x, y, rotation, prevX, prevY, d) => {
       if (!selectedZone) return { x, y };
       const rad = ((rotation || 0) * Math.PI) / 180;
       const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
       const halfW = cos * 20 + sin * 8; // semiancho real tras rotar
       const halfH = sin * 20 + cos * 8; // semialto real tras rotar
       const z = selectedZone;
-      let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
-      const xEdges = [{ pos: z.x, out: -1 }, { pos: z.x + z.w, out: 1 }];
-      const yEdges = [{ pos: z.y, out: -1 }, { pos: z.y + z.h, out: 1 }];
+      let sx = x, sy = y;
+      const nearZoneY = (py) => py > z.y - halfH - GOAL_RESIST && py < z.y + z.h + halfH + GOAL_RESIST;
+      const nearZoneX = (px) => px > z.x - halfW - GOAL_RESIST && px < z.x + z.w + halfW + GOAL_RESIST;
+      if (!d.breachX && nearZoneY(y)) {
+        const leftFlush = z.x - halfW, rightFlush = z.x + z.w + halfW;
+        if (prevX <= leftFlush && x > leftFlush) {
+          const overshoot = x - leftFlush;
+          if (overshoot <= GOAL_RESIST) sx = leftFlush; else { sx = x; d.breachX = true; }
+        } else if (prevX >= rightFlush && x < rightFlush) {
+          const overshoot = rightFlush - x;
+          if (overshoot <= GOAL_RESIST) sx = rightFlush; else { sx = x; d.breachX = true; }
+        }
+      }
+      if (!d.breachY && nearZoneX(x)) {
+        const topFlush = z.y - halfH, bottomFlush = z.y + z.h + halfH;
+        if (prevY <= topFlush && y > topFlush) {
+          const overshoot = y - topFlush;
+          if (overshoot <= GOAL_RESIST) sy = topFlush; else { sy = y; d.breachY = true; }
+        } else if (prevY >= bottomFlush && y < bottomFlush) {
+          const overshoot = bottomFlush - y;
+          if (overshoot <= GOAL_RESIST) sy = bottomFlush; else { sy = y; d.breachY = true; }
+        }
+      }
+      // Imán a las guías internas (cuartos/centro) — para cuando ya está dentro de la zona.
       const xMid = [z.x + z.w * 0.25, z.x + z.w / 2, z.x + z.w * 0.75];
       const yMid = [z.y + z.h * 0.25, z.y + z.h / 2, z.y + z.h * 0.75];
-      for (const e of xEdges) {
-        const d = Math.abs(x - e.pos);
-        if (d < bestDx) { bestDx = d; sx = e.pos + e.out * halfW; }
-      }
+      let bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
       for (const gx of xMid) {
-        const d = Math.abs(x - gx);
-        if (d < bestDx) { bestDx = d; sx = gx; }
-      }
-      for (const e of yEdges) {
-        const d = Math.abs(y - e.pos);
-        if (d < bestDy) { bestDy = d; sy = e.pos + e.out * halfH; }
+        const dd = Math.abs(sx - gx);
+        if (dd < bestDx) { bestDx = dd; sx = gx; }
       }
       for (const gy of yMid) {
-        const d = Math.abs(y - gy);
-        if (d < bestDy) { bestDy = d; sy = gy; }
+        const dd = Math.abs(sy - gy);
+        if (dd < bestDy) { bestDy = dd; sy = gy; }
       }
       return { x: sx, y: sy };
     },
@@ -449,7 +465,7 @@ export default function EIIEditor() {
         setMiniGoals((gs) => gs.map((g) => {
           if (g.id !== d.id) return g;
           const raw = { x: clamp(p.x - d.offX, -MARGIN + 20, VB_W + MARGIN - 20), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) };
-          return { ...g, ...snapGoalPos(raw.x, raw.y, g.rotation) };
+          return { ...g, ...snapGoalPos(raw.x, raw.y, g.rotation, g.x, g.y, d) };
         }));
       } else if (d.type === "drawLine") {
         setLineDraft({ x1: d.startX, y1: d.startY, x2: p.x, y2: p.y });
@@ -617,7 +633,10 @@ export default function EIIEditor() {
     toggleActive("goal", id);
     const g = miniGoals.find((x) => x.id === id);
     const p = toSvgPoint(e.clientX, e.clientY);
-    dragRef.current = { type: "moveGoal", id, offX: p.x - g.x, offY: p.y - g.y };
+    // breachX/breachY: mientras dura este arrastre, controla si el usuario ya "atravesó" la
+    // resistencia de la línea en ese eje. Empieza en false: la primera reacción siempre es
+    // frenar en la línea del espacio/subespacio seleccionado.
+    dragRef.current = { type: "moveGoal", id, offX: p.x - g.x, offY: p.y - g.y, breachX: false, breachY: false };
   };
   const addPlayer = (team) => {
     const cx = zones.find((z) => z.id === selectedZoneId);
