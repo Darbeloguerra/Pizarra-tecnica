@@ -314,6 +314,46 @@ export default function EIIEditor() {
     },
     [zones]
   );
+  // Imán de la miniportería: a diferencia de jugadores/balones (que se centran sobre la
+  // guía), una portería tiene cuerpo (boca + fondo) y NO debe quedar a caballo de la línea.
+  // Al acercarla a un borde real de la zona activa, se coloca por FUERA del espacio con el
+  // lado más cercano pegado exactamente a esa línea (nunca centrada sobre ella). Si en cambio
+  // se acerca a una guía interna (cuartos/centro, que no son un borde real), sí se centra
+  // sobre esa guía como el resto de objetos. Los cálculos usan el rectángulo de la portería
+  // (40×16) ya rotado, para que el lado que toca la línea sea el correcto en cualquier ángulo.
+  const snapGoalPos = useCallback(
+    (x, y, rotation) => {
+      if (!selectedZone) return { x, y };
+      const rad = ((rotation || 0) * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
+      const halfW = cos * 20 + sin * 8; // semiancho real tras rotar
+      const halfH = sin * 20 + cos * 8; // semialto real tras rotar
+      const z = selectedZone;
+      let sx = x, sy = y, bestDx = CENTER_SNAP, bestDy = CENTER_SNAP;
+      const xEdges = [{ pos: z.x, out: -1 }, { pos: z.x + z.w, out: 1 }];
+      const yEdges = [{ pos: z.y, out: -1 }, { pos: z.y + z.h, out: 1 }];
+      const xMid = [z.x + z.w * 0.25, z.x + z.w / 2, z.x + z.w * 0.75];
+      const yMid = [z.y + z.h * 0.25, z.y + z.h / 2, z.y + z.h * 0.75];
+      for (const e of xEdges) {
+        const d = Math.abs(x - e.pos);
+        if (d < bestDx) { bestDx = d; sx = e.pos + e.out * halfW; }
+      }
+      for (const gx of xMid) {
+        const d = Math.abs(x - gx);
+        if (d < bestDx) { bestDx = d; sx = gx; }
+      }
+      for (const e of yEdges) {
+        const d = Math.abs(y - e.pos);
+        if (d < bestDy) { bestDy = d; sy = e.pos + e.out * halfH; }
+      }
+      for (const gy of yMid) {
+        const d = Math.abs(y - gy);
+        if (d < bestDy) { bestDy = d; sy = gy; }
+      }
+      return { x: sx, y: sy };
+    },
+    [selectedZone]
+  );
   useEffect(() => {
     (async () => {
       try {
@@ -409,7 +449,7 @@ export default function EIIEditor() {
         setMiniGoals((gs) => gs.map((g) => {
           if (g.id !== d.id) return g;
           const raw = { x: clamp(p.x - d.offX, -MARGIN + 20, VB_W + MARGIN - 20), y: clamp(p.y - d.offY, -MARGIN + 8, VB_H + MARGIN - 8) };
-          return { ...g, ...snapToZoneCenter(raw.x, raw.y) };
+          return { ...g, ...snapGoalPos(raw.x, raw.y, g.rotation) };
         }));
       } else if (d.type === "drawLine") {
         setLineDraft({ x1: d.startX, y1: d.startY, x2: p.x, y2: p.y });
@@ -477,7 +517,7 @@ export default function EIIEditor() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId, viewMode, snapToZoneCenter, snapZonePos]);
+  }, [toSvgPoint, nextZoneId, drawTool, lineStyle, lineCurve, markerShape, drawColor, nextLineId, nextMarkerId, viewMode, snapToZoneCenter, snapZonePos, snapGoalPos]);
   const startCreate = (e) => {
     if (drawTool === "line" || drawTool === "arrow") {
       const p = toSvgPoint(e.clientX, e.clientY);
