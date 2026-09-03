@@ -315,14 +315,43 @@ export default function EIIEditor() {
     },
     [zones]
   );
-  // Portería = barrera con resistencia, no un imán de proximidad. Requisito: "ninguna
-  // superficie de la portería debe entrar en el espacio de primeras": la primera reacción al
-  // acercarla a una línea del espacio o subespacio SELECCIONADO es frenarla justo en el borde
-  // (fuera, sin invadir). Solo si el usuario sigue presionando más allá de GOAL_RESIST se le
-  // deja atravesar esa línea; a partir de ahí queda libre el resto del arrastre (bandera
-  // breachX/breachY en el propio "d" del drag, para no volver a frenar hasta soltar y volver
-  // a coger la portería). Una vez dentro (o si ya empezaba dentro), sigue imantándose a las
-  // guías internas (cuartos/centro) de la zona, igual que antes.
+  // Portería = barrera con resistencia, no un imán de proximidad. Cada línea (borde) de la
+  // zona seleccionada es una "banda prohibida" de ancho = el grosor de la portería en ese eje:
+  // la portería nunca debe descansar a caballo de la línea, venga de dentro o de fuera. Al
+  // tocar el primer límite de esa banda se frena en seco (fuera si venía de fuera, dentro si
+  // venía de dentro); solo si sigues presionando más de GOAL_RESIST más allá, salta al otro
+  // lado de la banda y a partir de ahí queda libre el resto del arrastre (bandera
+  // breachX/breachY en el propio "d" del drag). Una vez dentro, sigue imantándose a las guías
+  // internas (cuartos/centro) de la zona, igual que antes.
+  const axisBarrier = (prev, raw, inMin, inMax, outMin, outMax, resist) => {
+    if (prev <= outMin) {
+      if (raw > outMin) {
+        const overshoot = raw - outMin;
+        return overshoot <= resist ? { pos: outMin, breached: false } : { pos: raw, breached: true };
+      }
+      return { pos: raw, breached: false };
+    }
+    if (prev >= outMax) {
+      if (raw < outMax) {
+        const overshoot = outMax - raw;
+        return overshoot <= resist ? { pos: outMax, breached: false } : { pos: raw, breached: true };
+      }
+      return { pos: raw, breached: false };
+    }
+    if (prev >= inMin && prev <= inMax) {
+      if (raw < inMin) {
+        const overshoot = inMin - raw;
+        return overshoot <= resist ? { pos: inMin, breached: false } : { pos: raw, breached: true };
+      }
+      if (raw > inMax) {
+        const overshoot = raw - inMax;
+        return overshoot <= resist ? { pos: inMax, breached: false } : { pos: raw, breached: true };
+      }
+      return { pos: raw, breached: false };
+    }
+    // prev ya estaba a caballo de una línea (caso raro, p.ej. dato antiguo): no forzar nada.
+    return { pos: raw, breached: false };
+  };
   const snapGoalPos = useCallback(
     (x, y, rotation, prevX, prevY, d) => {
       if (!selectedZone) return { x, y };
@@ -335,24 +364,14 @@ export default function EIIEditor() {
       const nearZoneY = (py) => py > z.y - halfH - GOAL_RESIST && py < z.y + z.h + halfH + GOAL_RESIST;
       const nearZoneX = (px) => px > z.x - halfW - GOAL_RESIST && px < z.x + z.w + halfW + GOAL_RESIST;
       if (!d.breachX && nearZoneY(y)) {
-        const leftFlush = z.x - halfW, rightFlush = z.x + z.w + halfW;
-        if (prevX <= leftFlush && x > leftFlush) {
-          const overshoot = x - leftFlush;
-          if (overshoot <= GOAL_RESIST) sx = leftFlush; else { sx = x; d.breachX = true; }
-        } else if (prevX >= rightFlush && x < rightFlush) {
-          const overshoot = rightFlush - x;
-          if (overshoot <= GOAL_RESIST) sx = rightFlush; else { sx = x; d.breachX = true; }
-        }
+        const r = axisBarrier(prevX, x, z.x + halfW, z.x + z.w - halfW, z.x - halfW, z.x + z.w + halfW, GOAL_RESIST);
+        sx = r.pos;
+        if (r.breached) d.breachX = true;
       }
       if (!d.breachY && nearZoneX(x)) {
-        const topFlush = z.y - halfH, bottomFlush = z.y + z.h + halfH;
-        if (prevY <= topFlush && y > topFlush) {
-          const overshoot = y - topFlush;
-          if (overshoot <= GOAL_RESIST) sy = topFlush; else { sy = y; d.breachY = true; }
-        } else if (prevY >= bottomFlush && y < bottomFlush) {
-          const overshoot = bottomFlush - y;
-          if (overshoot <= GOAL_RESIST) sy = bottomFlush; else { sy = y; d.breachY = true; }
-        }
+        const r = axisBarrier(prevY, y, z.y + halfH, z.y + z.h - halfH, z.y - halfH, z.y + z.h + halfH, GOAL_RESIST);
+        sy = r.pos;
+        if (r.breached) d.breachY = true;
       }
       // Imán a las guías internas (cuartos/centro) — para cuando ya está dentro de la zona.
       const xMid = [z.x + z.w * 0.25, z.x + z.w / 2, z.x + z.w * 0.75];
